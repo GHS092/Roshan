@@ -431,58 +431,67 @@ function downloadCompleteReport() {
 function calculateKPIs() {
   const userId = sessionStorage.getItem('userId');
   const userTransactions = transactions.filter(t => t.userId === userId);
-  const currentMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith('2025-01')).reduce((sum, t) => sum + t.amount, 0);
-  const currentMonthCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith('2025-01')).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const prevMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith('2024-12')).reduce((sum, t) => sum + t.amount, 0);
-  const prevMonthCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith('2024-12')).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const currentMonthFixedCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'fijo' && t.date.startsWith('2025-01')).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  function getMonthYear(dateString) {
-    const [year, month] = dateString.split('-');
-    return {
-      year: parseInt(year),
-      month: parseInt(month)
-    };
-  }
-  const dates = userTransactions.map(t => t.date).sort((a, b) => b.localeCompare(a));
-  const currentDate = dates.length > 0 ? getMonthYear(dates[0]) : {
-    year: 2025,
-    month: 1
-  };
-  let prevYear = currentDate.year;
-  let prevMonth = currentDate.month - 1;
+
+  // Obtener la fecha actual
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // getMonth() es 0-indexado (0=Enero, 11=Diciembre)
+
+  // Obtener el prefijo de mes actual para filtrar transacciones (YYYY-MM)
+  const currentMonthPrefix = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+
+  // Calcular ingresos y costos del mes actual
+  const dynamicCurrentMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + t.amount, 0);
+  const dynamicCurrentMonthCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  // Calcular ingresos y costos del mes anterior
+  let prevYear = currentYear;
+  let prevMonth = currentMonth - 1;
   if (prevMonth === 0) {
     prevMonth = 12;
     prevYear--;
   }
-  const currentPrefix = `${currentDate.year}-${String(currentDate.month).padStart(2, '0')}`;
-  const prevPrefix = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
-  const dynamicCurrentMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + t.amount, 0);
-  const dynamicCurrentMonthCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const dynamicPrevMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(prevPrefix)).reduce((sum, t) => sum + t.amount, 0);
-  const dynamicPrevMonthCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(prevPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const prevMonthPrefix = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+  const dynamicPrevMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(prevMonthPrefix)).reduce((sum, t) => sum + t.amount, 0);
+  const dynamicPrevMonthCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(prevMonthPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  // Obtener costos fijos del mes actual (usando prefijo actual)
+  const currentMonthFixedCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'fijo' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  // Calcular KPIs
   const currentGrossMargin = dynamicCurrentMonthRevenue > 0 ? (dynamicCurrentMonthRevenue - dynamicCurrentMonthCosts) / dynamicCurrentMonthRevenue * 100 : 0;
   const prevGrossMargin = dynamicPrevMonthRevenue > 0 ? (dynamicPrevMonthRevenue - dynamicPrevMonthCosts) / dynamicPrevMonthRevenue * 100 : 0;
+
   const grossMarginText = dynamicCurrentMonthRevenue > 0 ? `${currentGrossMargin.toFixed(1)}%` : "No hay ingresos registrados";
   const revenueGrowth = dynamicPrevMonthRevenue > 0 ? (dynamicCurrentMonthRevenue - dynamicPrevMonthRevenue) / dynamicPrevMonthRevenue * 100 : 0;
   const revenueGrowthText = dynamicPrevMonthRevenue > 0 ? `${revenueGrowth.toFixed(1)}%` : "Sin datos previos";
   const breakeven = currentGrossMargin > 0 ? currentMonthFixedCosts / (currentGrossMargin / 100) : 0;
   const breakevenText = currentGrossMargin > 0 ? `S/. ${formatNumber(breakeven)}` : "No calculable";
-  const monthNames = ['Diciembre', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+  // Nombres de los meses para la visualización
+  const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+  // Actualizar la visualización de los KPIs
   updateKPIDisplay('grossMargin', grossMarginText, currentGrossMargin - prevGrossMargin, `<div>Margen bruto: Ingresos menos costos como porcentaje de ingresos</div>
-                             <div>${monthNames[currentDate.month]} ${currentDate.year}: ${currentGrossMargin.toFixed(1)}%</div>
-                             <div>${monthNames[prevMonth]} ${prevYear}: ${prevGrossMargin.toFixed(1)}%</div>`);
+                             <div>${monthNames[currentMonth - 1]} ${currentYear}: ${currentGrossMargin.toFixed(1)}%</div>
+                             <div>${monthNames[prevMonth - 1]} ${prevYear}: ${prevGrossMargin.toFixed(1)}%</div>`);
+
   updateKPIDisplay('revenueGrowth', revenueGrowthText, revenueGrowth, `<div>Variación de ingresos entre períodos</div>
-                             <div>${monthNames[currentDate.month]} ${currentDate.year}: S/. ${formatNumber(dynamicCurrentMonthRevenue)}</div>
-                             <div>${monthNames[prevMonth]} ${prevYear}: S/. ${formatNumber(dynamicPrevMonthRevenue)}</div>`);
+                             <div>${monthNames[currentMonth - 1]} ${currentYear}: S/. ${formatNumber(dynamicCurrentMonthRevenue)}</div>
+                             <div>${monthNames[prevMonth - 1]} ${prevYear}: S/. ${formatNumber(dynamicPrevMonthRevenue)}</div>`);
+
   updateKPIDisplay('breakeven', breakevenText, null, `<div>Nivel de ingresos necesario para cubrir costos fijos</div>
                              <div>Costos fijos: S/. ${formatNumber(currentMonthFixedCosts)}</div>
                              <div>Margen bruto: ${grossMarginText}</div>`);
+
   updateKPIDisplay('dashboardGrossMargin', grossMarginText, currentGrossMargin - prevGrossMargin, `<div>Margen bruto: Ingresos menos costos como porcentaje de ingresos</div>
-                             <div>${monthNames[currentDate.month]} ${currentDate.year}: ${currentGrossMargin.toFixed(1)}%</div>
-                             <div>${monthNames[prevMonth]} ${prevYear}: ${prevGrossMargin.toFixed(1)}%</div>`);
+                             <div>${monthNames[currentMonth - 1]} ${currentYear}: ${currentGrossMargin.toFixed(1)}%</div>
+                             <div>${monthNames[prevMonth - 1]} ${prevYear}: ${prevGrossMargin.toFixed(1)}%</div>`);
+
   updateKPIDisplay('dashboardRevenueGrowth', revenueGrowthText, revenueGrowth, `<div>Variación de ingresos entre períodos</div>
-                             <div>${monthNames[currentDate.month]} ${currentDate.year}: S/. ${formatNumber(dynamicCurrentMonthRevenue)}</div>
-                             <div>${monthNames[prevMonth]} ${prevYear}: S/. ${formatNumber(dynamicPrevMonthRevenue)}</div>`);
+                             <div>${monthNames[currentMonth - 1]} ${currentYear}: S/. ${formatNumber(dynamicCurrentMonthRevenue)}</div>
+                             <div>${monthNames[prevMonth - 1]} ${prevYear}: S/. ${formatNumber(dynamicPrevMonthRevenue)}</div>`);
+
   updateKPIDisplay('dashboardBreakeven', breakevenText, null, `<div>Nivel de ingresos necesario para cubrir costos fijos</div>
                              <div>Costos fijos: S/. ${formatNumber(currentMonthFixedCosts)}</div>
                              <div>Margen bruto: ${grossMarginText}</div>`);
