@@ -60,7 +60,7 @@ function importTransactionsCSV() {
   };
 }
 
-// Función mejorada para parsear CSV con validación estricta
+// Función mejorada para parsear CSV con validación estricta y normalización de fechas
 function parseCSV(csvText) {
   const lines = csvText.trim().split('\n');
   const headers = lines[0].split(';').map(header => header.trim().replace(/"/g, ''));
@@ -83,14 +83,19 @@ function parseCSV(csvText) {
         if (isNaN(value)) return null;
         value = parseFloat(value.toFixed(2));
       } else if (header === 'Fecha') {
-        value = value.replace(/"/g, '').split('-').map(part => part.padStart(2, '0')).join('-');
+        // Normalizar la fecha al formato YYYY-MM-DD
+        value = moment(value, ['DD-MM-YYYY', 'YYYY-MM-DD']).format('YYYY-MM-DD');
+        if (!moment(value, 'YYYY-MM-DD', true).isValid()) {
+          showNotification('Error', `Formato de fecha inválido en la línea ${i + 1}`, 'error');
+          return null;
+        }
       } else if (header === 'Descripción' || header === 'Categoría' || header === 'Tipo de Costo') {
         value = value.replace(/^"(.*)"$/, '$1').replace(/""/g, '"');
       }
       obj[header.toLowerCase()] = value;
       return obj;
     }, {});
-    if (transaction && typeof transaction.monto === 'number') {
+    if (transaction && typeof transaction.monto === 'number' && transaction.fecha) {
       transactions.push({
         id: uuid.v4(),
         type: transaction.tipo === 'Ingreso' ? 'entrada' : 'saida',
@@ -251,41 +256,50 @@ function downloadCompleteReport() {
     }
   });
 
-  // Más secciones del reporte con paginación similar...
-
   doc.save('reporte_financiero_completo.pdf');
 }
 
-// Cálculo centralizado de KPIs
+// Cálculo de KPIs con fechas corregidas
 function calculateKPIs() {
   const userId = sessionStorage.getItem('userId');
   if (!userId) return { grossMarginText: 'N/A', revenueGrowthText: 'N/A', breakevenText: 'N/A' };
   const userTransactions = state.transactions.filter(t => t.userId === userId);
 
   const now = moment();
-  const currentPrefix = now.format('YYYY-MM');
-  const prevMonth = now.clone().subtract(1, 'month');
-  const prevPrefix = prevMonth.format('YYYY-MM');
+  const currentMonth = now.startOf('month').format('YYYY-MM'); // Inicio del mes actual
+  const prevMonth = now.clone().subtract(1, 'month').startOf('month').format('YYYY-MM'); // Inicio del mes anterior
 
-  const currentRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + t.amount, 0);
-  const currentCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const prevRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(prevPrefix)).reduce((sum, t) => sum + t.amount, 0);
-  const prevCosts = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(prevPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const currentFixedCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'fijo' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentRevenue = userTransactions
+    .filter(t => t.type === 'entrada' && t.date.startsWith(currentMonth))
+    .reduce((sum, t) => sum + t.amount, 0);
+  const currentCosts = userTransactions
+    .filter(t => t.type === 'saida' && t.date.startsWith(currentMonth))
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const prevRevenue = userTransactions
+    .filter(t => t.type === 'entrada' && t.date.startsWith(prevMonth))
+    .reduce((sum, t) => sum + t.amount, 0);
+  const prevCosts = userTransactions
+    .filter(t => t.type === 'saida' && t.date.startsWith(prevMonth))
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentFixedCosts = userTransactions
+    .filter(t => t.type === 'saida' && t.costType === 'fijo' && t.date.startsWith(currentMonth))
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
   const currentGrossMargin = currentRevenue > 0 ? (currentRevenue - currentCosts) / currentRevenue * 100 : 0;
   const prevGrossMargin = prevRevenue > 0 ? (prevRevenue - prevCosts) / prevRevenue * 100 : 0;
-  const grossMarginText = currentRevenue > 0 ? `${currentGrossMargin.toFixed(1)}%` : "N/A";
+  const grossMarginText = currentRevenue > 0 ? `${currentGrossMargin.toFixed(1)}%` : "No hay ingresos registrados";
   const revenueGrowth = prevRevenue > 0 ? ((currentRevenue - prevRevenue) / prevRevenue * 100).toFixed(1) : "N/A";
   const breakeven = currentGrossMargin > 0 ? (currentFixedCosts / (currentGrossMargin / 100)).toFixed(2) : "N/A";
 
   return {
     grossMarginText,
-    revenueGrowthText: revenueGrowth !== "N/A" ? `${revenueGrowth}%` : "N/A",
-    breakevenText: breakeven !== "N/A" ? `S/. ${formatNumber(breakeven)}` : "N/A",
+    revenueGrowthText: revenueGrowth !== "N/A" ? `${revenueGrowth}%` : "Sin datos previos",
+    breakevenText: breakeven !== "N/A" ? `S/. ${formatNumber(breakeven)}` : "No calculable",
     currentRevenue,
     prevRevenue,
-    prevGrossMargin: prevGrossMargin.toFixed(1) + "%"
+    prevGrossMargin: prevGrossMargin.toFixed(1) + "%",
+    currentMonth,
+    prevMonth
   };
 }
 
@@ -301,6 +315,7 @@ function updateKPIDisplay(elementId, value, trend, comparisonHtml) {
   if (comparisonElement) comparisonElement.innerHTML = comparisonHtml;
 }
 
+// Actualización del Dashboard con filtrado correcto por mes actual
 function updateDashboard() {
   if (!checkDependencies()) return;
   const userId = sessionStorage.getItem('userId');
@@ -309,20 +324,46 @@ function updateDashboard() {
     return;
   }
   const userTransactions = state.transactions.filter(t => t.userId === userId);
-  const totalBalance = userTransactions.reduce((sum, t) => sum + t.amount, 0);
+
+  const now = moment();
+  const currentMonthStart = now.startOf('month').format('YYYY-MM-DD');
+  const currentDate = now.format('YYYY-MM-DD');
+
+  const currentTransactions = userTransactions.filter(t => {
+    const transactionDate = moment(t.date).format('YYYY-MM-DD');
+    return transactionDate >= currentMonthStart && transactionDate <= currentDate;
+  });
+
+  const totalBalance = currentTransactions.reduce((sum, t) => sum + t.amount, 0);
   const balanceElement = document.querySelector('#dashboard .card-text.text-primary');
   if (balanceElement) balanceElement.textContent = `S/. ${formatNumber(totalBalance)}`;
 
-  const now = moment();
-  const currentPrefix = now.format('YYYY-MM');
-  const currentRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + t.amount, 0);
-  const currentExpenses = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(currentPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentRevenue = currentTransactions
+    .filter(t => t.type === 'entrada')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const currentExpenses = currentTransactions
+    .filter(t => t.type === 'saida')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentFixedCosts = currentTransactions
+    .filter(t => t.type === 'saida' && t.costType === 'fijo')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentVariableCosts = currentTransactions
+    .filter(t => t.type === 'saida' && t.costType !== 'fijo')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
 
-  document.querySelector('#ingresosMesActual').textContent = `S/. ${formatNumber(currentRevenue)}`;
-  document.querySelector('#gastosMesActual').textContent = `S/. ${formatNumber(currentExpenses)}`;
+  const ingresosMesActual = document.querySelector('#ingresosMesActual');
+  if (ingresosMesActual) ingresosMesActual.textContent = `S/. ${formatNumber(currentRevenue)}`;
+  const gastosMesActual = document.querySelector('#gastosMesActual');
+  if (gastosMesActual) gastosMesActual.textContent = `S/. ${formatNumber(currentExpenses)}`;
+  const costosFijosMesActual = document.querySelector('#costosFijosMesActual');
+  if (costosFijosMesActual) costosFijosMesActual.textContent = `S/. ${formatNumber(currentFixedCosts)}`;
+  const costosVariablesMesActual = document.querySelector('#costosVariablesMesActual');
+  if (costosVariablesMesActual) costosVariablesMesActual.textContent = `S/. ${formatNumber(currentVariableCosts)}`;
 
   const kpis = calculateKPIs();
-  updateKPIDisplay('grossMargin', kpis.grossMarginText, kpis.grossMarginText !== "N/A" ? parseFloat(kpis.grossMarginText) - parseFloat(kpis.prevGrossMargin) : 0, 'Comparación del margen bruto');
+  updateKPIDisplay('grossMargin', kpis.grossMarginText, kpis.grossMarginText !== "No hay ingresos registrados" ? parseFloat(kpis.grossMarginText) - parseFloat(kpis.prevGrossMargin) : 0, `Comparativa del margen bruto`);
+  updateKPIDisplay('revenueGrowth', kpis.revenueGrowthText, kpis.revenueGrowthText !== "Sin datos previos" ? parseFloat(kpis.revenueGrowthText) : 0, `${moment(kpis.currentMonth, 'YYYY-MM').format('MMMM YYYY')}: S/. ${formatNumber(kpis.currentRevenue)} vs ${moment(kpis.prevMonth, 'YYYY-MM').format('MMMM YYYY')}: S/. ${formatNumber(kpis.prevRevenue)}`);
+  updateKPIDisplay('breakeven', kpis.breakevenText, 0, `Nivel mínimo de ingresos requerido`);
 }
 
 // Función para formatear números con internacionalización
@@ -344,7 +385,7 @@ function showNotification(title, message, type = 'info', duration = 3000) {
   setTimeout(() => notification.remove(), duration);
 }
 
-// Función placeholder para otras funciones requeridas por el HTML
+// Funciones placeholder para otras funcionalidades requeridas por el HTML
 function updateSavingsFromTransaction(transaction) {
   console.log('Updating savings from transaction:', transaction);
 }
