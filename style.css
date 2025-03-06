@@ -1,5 +1,6 @@
-/* Add these styles to optimize graphics and buttons for high resolution displays */
+/* styles.css - Estilos originales restaurados */
 
+/* Add these styles to optimize graphics and buttons for high resolution displays */
 /* High-DPI Graphics Optimization */
 @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
   /* Enable text antialiasing */
@@ -68,7 +69,6 @@
 /* Chart.js Customization */
 .chart-container canvas {
   border-radius: 15px;
-  /* Optimize canvas for high-DPI */
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;
 }
