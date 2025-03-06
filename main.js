@@ -524,7 +524,21 @@ function updateDashboard() {
   const userTransactions = transactions.filter(t => t.userId === userId);
   const totalBalance = userTransactions.reduce((sum, t) => sum + t.amount, 0);
   document.querySelector('#dashboard .card-text.text-primary').textContent = `S/. ${formatNumber(totalBalance)}`;
-  const currentMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith('2025')).reduce((sum, t) => sum + t.amount, 0);
-  const currentMonthExpenses = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith('2025')).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const currentMonthFixedCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'fijo' && t.date.startsWith('2025')).reduce((sum, t) => sum + Math.abs(t.amount), 0);
-  const currentMonthVariableCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'variable' && t.date.startsWith('202
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const currentMonthPrefix = `${currentYear}-${currentMonth}`;
+  const currentMonthRevenue = userTransactions.filter(t => t.type === 'entrada' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + t.amount, 0);
+  const currentMonthExpenses = userTransactions.filter(t => t.type === 'saida' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentMonthFixedCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'fijo' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  const currentMonthVariableCosts = userTransactions.filter(t => t.type === 'saida' && t.costType === 'variable' && t.date.startsWith(currentMonthPrefix)).reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  document.querySelector('#ingresosMesActual').textContent = `S/. ${formatNumber(currentMonthRevenue)}`;
+  document.querySelector('#gastosMesActual').textContent = `S/. ${formatNumber(currentMonthExpenses)}`;
+  document.querySelector('#costosFijosMesActual').textContent = `S/. ${formatNumber(currentMonthFixedCosts)}`;
+  document.querySelector('#costosVariablesMesActual').textContent = `S/. ${formatNumber(currentMonthVariableCosts)}`;
+
+  updateSavingsDisplay();
+  calculateKPIs();
+  updateChart(userTransactions);
+}
