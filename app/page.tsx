@@ -842,7 +842,7 @@ export default function Home() {
                     <span className="text-sm font-medium">
                         Máscaras de selección aplicadas: {Object.keys(masks).length}
                     </span>
-                    </div>
+                  </div>
                 </div>
               )}
                 
