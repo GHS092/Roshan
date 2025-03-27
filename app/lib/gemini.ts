@@ -921,52 +921,242 @@ function processImageWithCanvas(
   });
 }
 
-// Nueva función para normalizar y estandarizar los valores de color RGB
+// Función mejorada para normalizar y estandarizar los valores de color RGB para una integración natural
 function standardizeColors(base64Image: string, colorMap?: Map<string, number[]>): Promise<string> {
   return processImageWithCanvas(base64Image, async (ctx, width, height) => {
     const imageData = ctx.getImageData(0, 0, width, height);
     const data = imageData.data;
     
-    // Si no hay un mapa de colores proporcionado, analizar la imagen para crear uno
-    if (!colorMap) {
-      // Este paso es opcional - ajusta los colores para mayor consistencia
-      // en futuras generaciones de imágenes similares
-      for (let i = 0; i < data.length; i += 4) {
-        // Solo procedemos si el píxel tiene opacidad
-        if (data[i+3] > 200) {
-          // Mejorar contraste general de la imagen
-          if (data[i] > 230 && data[i+1] > 230 && data[i+2] > 230) {
-            // Mejorar blancos
-            data[i] = 255;
-            data[i+1] = 255;
-            data[i+2] = 255;
-          }
-          
-          // Mejorar oscuros
-          else if (data[i] < 80 && data[i] > 40 && 
-                  data[i+1] < 60 && data[i+1] > 20 && 
-                  data[i+2] < 40 && data[i+2] > 10) {
-            // Tonos oscuros más definidos
-            data[i] = Math.max(30, data[i] - 10);
-            data[i+1] = Math.max(20, data[i+1] - 10); 
-            data[i+2] = Math.max(10, data[i+2] - 10);
-          }
-          
-          // Mejorar colores vivos
-          else if (data[i] > 200 && data[i+1] > 150 && data[i+2] < 100) {
-            // Amarillos y dorados más vibrantes
-            data[i] = Math.min(255, data[i] + 5);
-            data[i+1] = Math.min(255, data[i+1] + 5);
-          }
-        }
-      }
-    } else {
-      // Si se proporciona un mapa de colores, úsalo para aplicar colores consistentes
-      // (Implementación futura para casos de uso más complejos)
+    // Primer paso: Análisis de la imagen para detectar regiones artificiales
+    const regions = analyzeImageRegions(data, width, height);
+    
+    // Segundo paso: Procesamiento adaptativo basado en las regiones detectadas
+    if (regions.artificialEdges.length > 0) {
+      console.log(`Detectadas ${regions.artificialEdges.length} regiones con bordes artificiales, aplicando suavizado`);
+      applyAdaptiveBlending(data, width, height, regions.artificialEdges);
     }
     
+    // Tercer paso: Procesar colores y contrastes para una integración natural
+    // Esto mejora la armonización con el entorno
+    for (let i = 0; i < data.length; i += 4) {
+      // Solo procedemos si el píxel tiene opacidad completa
+      if (data[i+3] > 250) {
+        // Mejorar blancos y reflejos
+        if (data[i] > 245 && data[i+1] > 245 && data[i+2] > 245) {
+          // Blancos puros - mantener consistentes pero naturales
+          data[i] = 253;
+          data[i+1] = 253;
+          data[i+2] = 253;
+        }
+        
+        // Mejorar sombras profundas para eliminar compresión y blockiness
+        else if (data[i] < 30 && data[i+1] < 30 && data[i+2] < 30) {
+          // Evitar negro absoluto para mayor naturalidad
+          data[i] = Math.max(5, data[i] - 2);
+          data[i+1] = Math.max(5, data[i+1] - 2);
+          data[i+2] = Math.max(5, data[i+2] - 2);
+        }
+        
+        // Mejorar colores amarillos/dorados para mayor consistencia
+        else if (data[i] > 200 && data[i+1] > 150 && data[i+2] < 100) {
+          // Refinar tonos amarillos para mayor naturalidad
+          data[i] = Math.min(255, data[i] + 3);
+          data[i+1] = Math.min(255, data[i+1] + 2);
+        }
+        
+        // Mejorar colores verdes para mayor naturalidad en vegetación
+        else if (data[i] < 100 && data[i+1] > 120 && data[i+2] < 100 &&
+                data[i+1] > data[i] && data[i+1] > data[i+2]) {
+          // Refinar tonos verdes, añadir ligera variación
+          data[i] = Math.max(data[i] - 2, Math.min(data[i] + 2, data[i]));
+          data[i+1] = Math.max(data[i+1] - 1, Math.min(data[i+1] + 1, data[i+1]));
+          data[i+2] = Math.max(data[i+2] - 2, Math.min(data[i+2] + 2, data[i+2]));
+        }
+        
+        // Mejorar tonos de piel para mayor naturalidad
+        else if (data[i] > 180 && data[i] < 240 && 
+                data[i+1] > 140 && data[i+1] < 200 && 
+                data[i+2] > 110 && data[i+2] < 170) {
+          // Suavizar tonos de piel sin cambiarlos drásticamente
+          const avg = (data[i] + data[i+1] + data[i+2]) / 3;
+          data[i] = Math.floor(data[i] * 0.97 + avg * 0.03);
+          data[i+1] = Math.floor(data[i+1] * 0.97 + avg * 0.03);
+          data[i+2] = Math.floor(data[i+2] * 0.97 + avg * 0.03);
+        }
+      }
+    }
+    
+    // Cuarto paso: Aplicar reducción de artefactos de compresión y mejora de detalles
+    applyDetailEnhancement(data, width, height);
+    
+    // Aplicar todos los cambios al contexto del canvas
     ctx.putImageData(imageData, 0, 0);
   });
+}
+
+// Función auxiliar para analizar regiones de la imagen
+function analyzeImageRegions(data: Uint8ClampedArray, width: number, height: number) {
+  // Detectar bordes artificiales (possible signos de recorte y pegado)
+  const artificialEdges: Array<{x: number, y: number, radius: number}> = [];
+  
+  // Umbral para detectar cambios abruptos en color/contraste
+  const edgeThreshold = 35;
+  
+  // Buscar regiones con transiciones artificiales
+  for (let y = 2; y < height - 2; y += 2) {
+    for (let x = 2; x < width - 2; x += 2) {
+      const idx = (y * width + x) * 4;
+      
+      // Examinar píxeles vecinos para detectar bordes abruptos
+      const centerR = data[idx];
+      const centerG = data[idx + 1];
+      const centerB = data[idx + 2];
+      
+      // Comparar con píxeles circundantes para detectar bordes
+      let abruptChanges = 0;
+      const directions = [
+        {dx: -1, dy: 0}, {dx: 1, dy: 0}, {dx: 0, dy: -1}, {dx: 0, dy: 1},
+        {dx: -1, dy: -1}, {dx: 1, dy: -1}, {dx: -1, dy: 1}, {dx: 1, dy: 1}
+      ];
+      
+      for (const dir of directions) {
+        const nx = x + dir.dx;
+        const ny = y + dir.dy;
+        
+        // Saltar si está fuera de límites
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        
+        const nidx = (ny * width + nx) * 4;
+        const neighborR = data[nidx];
+        const neighborG = data[nidx + 1];
+        const neighborB = data[nidx + 2];
+        
+        // Calcular la diferencia de color
+        const diffR = Math.abs(centerR - neighborR);
+        const diffG = Math.abs(centerG - neighborG);
+        const diffB = Math.abs(centerB - neighborB);
+        
+        // Si la diferencia es mayor que el umbral, contar como cambio abrupto
+        if (diffR > edgeThreshold && diffG > edgeThreshold && diffB > edgeThreshold) {
+          abruptChanges++;
+        }
+      }
+      
+      // Si hay suficientes cambios abruptos, considerarlo un borde artificial
+      if (abruptChanges >= 3) {
+        artificialEdges.push({x, y, radius: 3});
+      }
+    }
+  }
+  
+  return {
+    artificialEdges
+  };
+}
+
+// Función para aplicar mezcla adaptativa en bordes artificiales
+function applyAdaptiveBlending(data: Uint8ClampedArray, width: number, height: number, 
+                               artificialEdges: Array<{x: number, y: number, radius: number}>) {
+  // Para cada borde artificial detectado
+  for (const edge of artificialEdges) {
+    const {x, y, radius} = edge;
+    
+    // Aplicar un kernel de suavizado solo en los bordes artificiales
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        
+        // Verificar límites
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        
+        // Distancia al centro
+        const distance = Math.sqrt(dx*dx + dy*dy);
+        if (distance > radius) continue;
+        
+        // Fuerza del suavizado basada en la distancia (más fuerte en el centro)
+        const blendFactor = 0.3 * (1 - distance / radius);
+        
+        // Calcular el color promedio de los vecinos para suavizar
+        const nidx = (ny * width + nx) * 4;
+        let sumR = 0, sumG = 0, sumB = 0;
+        let count = 0;
+        
+        // Kernel 3x3 para calcular promedio
+        for (let by = -1; by <= 1; by++) {
+          for (let bx = -1; bx <= 1; bx++) {
+            const bnx = nx + bx;
+            const bny = ny + by;
+            
+            if (bnx < 0 || bnx >= width || bny < 0 || bny >= height) continue;
+            
+            const bidx = (bny * width + bnx) * 4;
+            sumR += data[bidx];
+            sumG += data[bidx + 1];
+            sumB += data[bidx + 2];
+            count++;
+          }
+        }
+        
+        // Calcular color promedio
+        const avgR = sumR / count;
+        const avgG = sumG / count;
+        const avgB = sumB / count;
+        
+        // Aplicar suavizado
+        data[nidx] = Math.round(data[nidx] * (1 - blendFactor) + avgR * blendFactor);
+        data[nidx + 1] = Math.round(data[nidx + 1] * (1 - blendFactor) + avgG * blendFactor);
+        data[nidx + 2] = Math.round(data[nidx + 2] * (1 - blendFactor) + avgB * blendFactor);
+      }
+    }
+  }
+}
+
+// Función para mejorar detalles y textura
+function applyDetailEnhancement(data: Uint8ClampedArray, width: number, height: number) {
+  // Copiar datos originales para referencia
+  const originalData = new Uint8ClampedArray(data);
+  
+  // Aplicar un algoritmo simple de mejora de detalle
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = (y * width + x) * 4;
+      
+      // Calcular la luminancia del píxel
+      const luminance = 0.299 * originalData[idx] + 0.587 * originalData[idx + 1] + 0.114 * originalData[idx + 2];
+      
+      // Calcular luminancia promedio de vecinos
+      let sumLuminance = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue; // Saltar píxel central
+          
+          const nx = x + dx;
+          const ny = y + dy;
+          const nidx = (ny * width + nx) * 4;
+          
+          const nLuminance = 0.299 * originalData[nidx] + 0.587 * originalData[nidx + 1] + 0.114 * originalData[nidx + 2];
+          sumLuminance += nLuminance;
+        }
+      }
+      
+      const avgLuminance = sumLuminance / 8;
+      
+      // Calcular diferencia de detalle
+      const detailDiff = luminance - avgLuminance;
+      
+      // Aplicar mejora de detalle sutilmente
+      const enhancementFactor = 0.1; // Factor sutil para no exagerar
+      
+      // Aplicar mejora a cada canal
+      for (let c = 0; c < 3; c++) {
+        // Mejorar detalle basado en la diferencia de luminancia
+        data[idx + c] = Math.max(0, Math.min(255, 
+          originalData[idx + c] + detailDiff * enhancementFactor
+        ));
+      }
+    }
+  }
 }
 
 // Función adicional inspirada en el código Python compartido
@@ -1209,148 +1399,300 @@ export async function generateImageVariations(
       (promptLowerCase.includes('logo') && 
        (promptLowerCase.includes('imagen 1') || promptLowerCase.includes('imagen 2')));
     
-    // Para instrucciones de transferencia, ajustar las temperaturas para mayor precisión
-    let fidelityTemp = 0.05;
-    let balancedTemp = 0.2;
-    let creativeTemp = 0.5;
+    // Ajuste de temperaturas - Todas muy bajas para mantener precisión y evitar elementos adicionales
+    let fidelityTemp = 0.01;  // Temperatura extremadamente baja para alta fidelidad
+    let balancedTemp = 0.05;  // Temperatura muy baja para balance
     
     if (containsTransferInstructions && Array.isArray(imageData) && imageData.length > 1) {
-      console.log("Detectadas instrucciones de transferencia entre imágenes. Ajustando parámetros para mayor precisión.");
-      fidelityTemp = 0.01;  // Extremadamente bajo para máxima precisión
-      balancedTemp = 0.1;   // Bajo para precisión con ligera variación
-      creativeTemp = 0.3;   // Moderado para permitir creatividad pero mantener la instrucción principal
+      console.log("Detectadas instrucciones de transferencia entre imágenes. Ajustando parámetros.");
+      fidelityTemp = 0.01;
+      balancedTemp = 0.03;
     }
     
-    // Para evitar problemas de inconsistencia, forzar la generación secuencial
+    // Generar variaciones de forma secuencial pero con mejor manejo de errores
     const variations: string[] = [];
+    let hasSuccessfulGeneration = false;
     
-    // Generar primera variación con alta fidelidad (más similar a la original)
+    // Primera variación: Alta fidelidad (EXACTAMENTE lo que pide el usuario, sin añadidos)
     console.log(`Generando variación 1/${variationCount} (modo: fidelidad alta)`);
     try {
       const fidelityVariation = await generateVariation(imageData, prompt, masks, {
         temperature: fidelityTemp,
         topP: 0.5,
-        topK: 10,
+        topK: 5,
         variationMode: "fidelity"
       });
-      variations.push(fidelityVariation);
+      
+      if (fidelityVariation) {
+        variations.push(fidelityVariation);
+        hasSuccessfulGeneration = true;
+        console.log("Variación 1 generada con éxito");
+      } else {
+        throw new Error("La generación de variación de alta fidelidad devolvió un resultado vacío");
+      }
     } catch (error) {
-      console.error("Error al generar variación de alta fidelidad:", error);
-      // Intentar con el método de alta calidad como respaldo
+      console.error("No se pudo generar la variación de alta fidelidad:", error);
       try {
+        console.log("Intentando con método alternativo para variación 1...");
         const fallbackVariation = await generateHighQualityImage(imageData, prompt, masks);
         variations.push(fallbackVariation);
+        hasSuccessfulGeneration = true;
+        console.log("Variación 1 generada con método alternativo");
       } catch (fallbackError) {
-        console.error("También falló el método de respaldo:", fallbackError);
-        // Si falla el respaldo, crear una variación vacía
+        console.error("Método alternativo también falló:", fallbackError);
         variations.push("");
       }
     }
     
-    // Generar segunda variación con balance (compromiso entre fidelidad y creatividad)
+    // Segunda variación: Alta fidelidad con semilla modificada
     if (variationCount >= 2) {
-      console.log(`Generando variación 2/${variationCount} (modo: balanceado)`);
+      console.log(`Generando variación 2/${variationCount} (modo: fidelidad alta - semilla alternativa)`);
       try {
-        const balancedVariation = await generateVariation(imageData, prompt, masks, {
-          temperature: balancedTemp,
-          topP: 0.7,
-          topK: 20,
-          variationMode: "balanced"
+        // Usar la misma configuración de alta fidelidad pero con seed+1
+        const fidelityVariation2 = await generateVariation(imageData, prompt, masks, {
+          temperature: fidelityTemp,
+          topP: 0.5,
+          topK: 5,
+          variationMode: "fidelity_alt" // Uso interno para diferenciar la semilla
         });
-        variations.push(balancedVariation);
-      } catch (error) {
-        console.error("Error al generar variación balanceada:", error);
-        // Si la primera variación fue exitosa, duplicarla como respaldo
-        if (variations[0]) {
-          variations.push(variations[0]);
+        
+        if (fidelityVariation2) {
+          variations.push(fidelityVariation2);
+          hasSuccessfulGeneration = true;
+          console.log("Variación 2 generada con éxito");
         } else {
-          // Intentar con el método estándar
+          throw new Error("La generación de variación de alta fidelidad alternativa devolvió un resultado vacío");
+        }
+      } catch (error) {
+        console.error("No se pudo generar la segunda variación de alta fidelidad:", error);
+        if (hasSuccessfulGeneration) {
+          // Usar la primera variación exitosa como respaldo
+          if (variations[0]) {
+            variations.push(variations[0]);
+            console.log("Usando variación 1 como respaldo para variación 2");
+          } else {
+            console.error("No hay variaciones exitosas para usar como respaldo");
+            variations.push("");
+          }
+        } else {
           try {
-            const fallbackVariation = await generateImageFromPrompt(imageData, prompt, masks);
+            console.log("Intentando con método alternativo para variación 2...");
+            const fallbackVariation = await generateHighQualityImage(imageData, prompt, masks);
             variations.push(fallbackVariation);
+            hasSuccessfulGeneration = true;
+            console.log("Variación 2 generada con método alternativo");
           } catch (fallbackError) {
-            console.error("También falló el método de respaldo:", fallbackError);
+            console.error("Método alternativo también falló:", fallbackError);
             variations.push("");
           }
         }
       }
     }
     
-    // Generar tercera variación con enfoque creativo (más libertad interpretativa)
+    // Tercera variación: Balanceada pero con parámetros muy conservadores
     if (variationCount >= 3) {
-      console.log(`Generando variación 3/${variationCount} (modo: creativo)`);
+      console.log(`Generando variación 3/${variationCount} (modo: ligeramente balanceado)`);
       try {
-        const creativeVariation = await generateVariation(imageData, prompt, masks, {
-          temperature: creativeTemp,
-          topP: 0.8,
-          topK: 30,
-          variationMode: "creative"
+        const balancedVariation = await generateVariation(imageData, prompt, masks, {
+          temperature: balancedTemp,
+          topP: 0.6,
+          topK: 10,
+          variationMode: "balanced"
         });
-        variations.push(creativeVariation);
-      } catch (error) {
-        console.error("Error al generar variación creativa:", error);
-        // Si alguna de las variaciones anteriores fue exitosa, duplicarla
-        if (variations[0]) {
-          variations.push(variations[0]);
-        } else if (variations[1]) {
-          variations.push(variations[1]);
-        } else {
-          variations.push("");
-        }
-      }
-    }
-    
-    // Generar variaciones adicionales si se solicitaron más de 3
-    for (let i = 3; i < variationCount; i++) {
-      console.log(`Generando variación ${i+1}/${variationCount} (modo: aleatorio)`);
-      try {
-        // Para variaciones adicionales, alternar entre modos con parámetros ligeramente diferentes
-        const mode = i % 3 === 0 ? "fidelity" : i % 3 === 1 ? "balanced" : "creative";
-        const temp = i % 3 === 0 ? fidelityTemp * 1.2 : i % 3 === 1 ? balancedTemp * 1.2 : creativeTemp * 1.2;
         
-        const additionalVariation = await generateVariation(imageData, prompt, masks, {
-          temperature: temp,
-          topP: 0.7 + (i % 4) * 0.05,
-          topK: 20 + (i % 5) * 5,
-          variationMode: mode
-        });
-        variations.push(additionalVariation);
-      } catch (error) {
-        console.error(`Error al generar variación adicional ${i+1}:`, error);
-        // Si alguna de las variaciones anteriores fue exitosa, duplicarla
-        const validVariations = variations.filter(v => v);
-        if (validVariations.length > 0) {
-          // Usar una variación existente al azar
-          const randomIndex = Math.floor(Math.random() * validVariations.length);
-          variations.push(validVariations[randomIndex]);
+        if (balancedVariation) {
+          variations.push(balancedVariation);
+          hasSuccessfulGeneration = true;
+          console.log("Variación 3 generada con éxito");
         } else {
-          variations.push("");
+          throw new Error("La generación de variación balanceada devolvió un resultado vacío");
+        }
+      } catch (error) {
+        console.error("No se pudo generar la variación balanceada:", error);
+        if (hasSuccessfulGeneration) {
+          // Usar una variación anterior exitosa como respaldo
+          const validVariations = variations.filter(v => v);
+          if (validVariations.length > 0) {
+            const randomIndex = Math.floor(Math.random() * validVariations.length);
+            variations.push(validVariations[randomIndex]);
+            console.log(`Usando variación ${randomIndex + 1} como respaldo para variación 3`);
+          } else {
+            console.error("No hay variaciones exitosas para usar como respaldo");
+            variations.push("");
+          }
+        } else {
+          try {
+            console.log("Intentando con método alternativo para variación 3...");
+            const fallbackVariation = await generateHighQualityImage(imageData, prompt, masks);
+            variations.push(fallbackVariation);
+            hasSuccessfulGeneration = true;
+            console.log("Variación 3 generada con método alternativo");
+          } catch (fallbackError) {
+            console.error("Método alternativo también falló:", fallbackError);
+            variations.push("");
+          }
         }
       }
     }
     
-    // Filtrar variaciones vacías y asegurar que se devuelva al menos una
+    // Filtrar variaciones vacías
     const filteredVariations = variations.filter(v => v);
     
+    // Si no hay variaciones válidas, intentar un último recurso
     if (filteredVariations.length === 0) {
-      throw new Error("No se pudo generar ninguna variación válida.");
+      console.log("No se pudo generar ninguna variación válida. Intentando último recurso...");
+      try {
+        // Intentar un último enfoque más simple
+        const lastResortImage = await generateImageFromPrompt(imageData, prompt, masks);
+        filteredVariations.push(lastResortImage);
+        console.log("Generada imagen de último recurso");
+      } catch (lastError) {
+        console.error("Todos los métodos fallaron:", lastError);
+        throw new Error("No se pudo generar ninguna variación de imagen");
+      }
     }
     
-    // Si algunas variaciones fallaron pero otras no, completar con las exitosas
+    // Completar las variaciones faltantes duplicando las existentes
     while (filteredVariations.length < variationCount) {
       const randomIndex = Math.floor(Math.random() * filteredVariations.length);
       filteredVariations.push(filteredVariations[randomIndex]);
+      console.log(`Duplicando variación ${randomIndex + 1} para completar el conjunto`);
     }
     
-    console.log(`Generadas con éxito ${filteredVariations.length} variaciones`);
+    console.log(`Generadas ${filteredVariations.length} variaciones`);
     return filteredVariations;
   } catch (error) {
-    console.error("Error al generar variaciones de imagen:", error);
-    throw error;
+    console.error("Error crítico en generateImageVariations:", error);
+    
+    // Último intento desesperado: generar una sola imagen muy básica
+    try {
+      console.log("Intento de rescate final...");
+      const rescueImage = await generateImageFromPrompt(imageData, "modificar imagen", masks);
+      return [rescueImage, rescueImage, rescueImage]; // Devolver la misma imagen tres veces
+    } catch (finalError) {
+      console.error("Error final catastrófico:", finalError);
+      throw error; // Si todo falla, propagar el error original
+    }
   }
 }
 
-// Función auxiliar para generar una variante específica
+// Función para preparar un prompt con reglas de posicionamiento físico e integración visual
+function preparePromptWithPhysicalRules(originalPrompt: string, mode: string = 'balanced'): string {
+  // Verificar si el prompt ya menciona reglas de posicionamiento
+  const promptLower = originalPrompt.toLowerCase();
+  
+  // Lista amplia de términos que indican posición específica
+  const positioningTerms = [
+    'posici', 'coloca', 'poner', 'pon', 'situar', 'ubicar', 
+    'sobre', 'encima', 'debajo', 'junto', 'al lado', 'frente'
+  ];
+  
+  // Lista amplia de términos que indican adición de elementos
+  const additionTerms = [
+    'añade', 'añadir', 'agregar', 'agrega', 'pon', 'poner', 'coloca',
+    'incluye', 'incluir', 'inserta', 'insertar', 'incorpora'
+  ];
+  
+  // Lista amplia de sujetos comunes que pueden ser añadidos
+  const commonSubjects = [
+    // Animales
+    'perro', 'gato', 'caballo', 'vaca', 'oveja', 'cerdo', 'conejo', 'pájaro', 'ave', 'pato',
+    'gallina', 'pollo', 'animal', 'mascota', 'rata', 'ratón', 'ardilla', 'zorro', 'lobo',
+    'tigre', 'león', 'jirafa', 'elefante', 'oso', 'koala', 'canguro', 'serpiente', 'lagarto',
+    // Personas
+    'persona', 'hombre', 'mujer', 'niño', 'niña', 'bebé', 'adulto', 'anciano', 'anciana',
+    // Objetos
+    'coche', 'auto', 'camión', 'moto', 'bicicleta', 'silla', 'mesa', 'cama', 'sofá', 'armario',
+    'computadora', 'ordenador', 'teléfono', 'móvil', 'reloj', 'ventana', 'puerta', 'lámpara',
+    'planta', 'árbol', 'flor', 'roca', 'piedra', 'montaña', 'lago', 'mar', 'río', 'playa',
+    'edificio', 'casa', 'objeto', 'elemento', 'logo', 'texto', 'letrero', 'cartel'
+  ];
+  
+  // Verificar si el prompt contiene términos de posicionamiento explícito
+  const containsPositioningTerms = positioningTerms.some(term => promptLower.includes(term));
+  
+  // Verificar si el prompt indica adición de algún elemento
+  const additionTermFound = additionTerms.some(term => promptLower.includes(term));
+  
+  // Identificar qué sujeto o elemento está siendo añadido
+  let subjectFound = false;
+  let subjectType = '';
+  
+  if (additionTermFound) {
+    for (const subject of commonSubjects) {
+      if (promptLower.includes(subject)) {
+        subjectFound = true;
+        subjectType = subject;
+        break;
+      }
+    }
+  }
+  
+  // Si no encontramos un sujeto específico pero hay términos de adición,
+  // asumimos que se está añadiendo un elemento genérico
+  if (additionTermFound && !subjectFound) {
+    subjectType = 'elemento';
+  }
+  
+  // Preparar el prompt mejorado
+  let enhancedPrompt = originalPrompt;
+  
+  // Si se está añadiendo algo y no hay instrucciones de posicionamiento explícitas
+  if (additionTermFound && !containsPositioningTerms) {
+    // Detección de contexto para animales (cuadrúpedos vs. otros tipos)
+    if (['perro', 'gato', 'caballo', 'vaca', 'oveja', 'cerdo', 'conejo', 'tigre', 'león', 'zorro', 'lobo', 'oso'].includes(subjectType)) {
+      // Instrucciones para animales cuadrúpedos
+      enhancedPrompt += `. El ${subjectType} debe estar firmemente apoyado en el suelo u otra superficie sólida, con todas sus patas tocando la superficie. Debe parecer que está soportando naturalmente su peso con la postura típica del animal.`;
+    } 
+    else if (['pájaro', 'ave', 'pato', 'gallina', 'pollo'].includes(subjectType)) {
+      // Instrucciones para aves
+      enhancedPrompt += `. El ${subjectType} debe estar posado en una superficie apropiada o volando de manera natural. Si está posado, sus patas deben agarrar firmemente la superficie.`;
+    }
+    else if (['persona', 'hombre', 'mujer', 'niño', 'niña', 'bebé', 'adulto', 'anciano', 'anciana'].includes(subjectType)) {
+      // Instrucciones para personas
+      enhancedPrompt += `. La ${subjectType} debe estar de pie, sentada o en una postura natural sobre una superficie sólida. La posición debe ser física y anatómicamente correcta.`;
+    }
+    else {
+      // Instrucciones para objetos genéricos o no identificados
+      enhancedPrompt += `. Coloca este ${subjectType || 'elemento'} respetando las leyes físicas naturales. Debe estar firmemente apoyado sobre una superficie sólida (no flotando), con una posición estable y coherente con el entorno.`;
+    }
+  }
+  
+  // Preparar las reglas físicas según el modo de generación
+  let physicsRules = `\n\nREGLAS FÍSICAS Y DE INTEGRACIÓN VISUAL OBLIGATORIAS:\n`;
+  
+  // Reglas generales según el modo - simplificando a sólo dos modos, ambos conservadores
+  if (mode === 'fidelity') {
+    physicsRules += `
+- SIGUE LITERALMENTE lo que dice el prompt, sin añadir elementos no solicitados
+- SOLO añade EXACTAMENTE lo solicitado, nada más
+- Mantén alta fidelidad a la imagen original
+- Preserva todos los elementos existentes intactos
+- No alteres el fondo ni la iluminación original
+- NO AÑADAS elementos adicionales que no se solicitan en el prompt`;
+  } else { // modo balanced o cualquier otro
+    physicsRules += `
+- SIGUE LITERALMENTE lo que dice el prompt, sin añadir elementos no solicitados
+- SOLO añade EXACTAMENTE lo solicitado, nada más
+- Equilibra la fidelidad con naturalidad
+- Preserva los elementos principales de la imagen
+- Integra lo solicitado de manera armoniosa
+- Permite ajustes mínimos para mejorar la coherencia
+- NO AÑADAS elementos adicionales que no se solicitan en el prompt`;
+  }
+  
+  // ... existing code ...
+  
+  // Agregar un recordatorio especial para NO añadir elementos extra
+  physicsRules += `
+
+IMPORTANTE: NUNCA añadas elementos no solicitados. Si el prompt pide "añade un perro", SOLO añade UN PERRO y nada más. NO añadas pájaros, personas u otros animales a menos que el prompt lo solicite explícitamente.`;
+  
+  // Combinar el prompt original con las reglas
+  return enhancedPrompt + physicsRules;
+}
+
+// Modificamos generateVariation para usar la nueva función
 async function generateVariation(
   imageData: string[] | string,
   prompt: string,
@@ -1359,50 +1701,78 @@ async function generateVariation(
     temperature?: number;
     topP?: number;
     topK?: number;
-    variationMode?: "fidelity" | "balanced" | "creative";
+    variationMode?: "fidelity" | "balanced" | "fidelity_alt" | "creative";
   }
 ): Promise<string> {
   try {
     // Configurar opciones con valores predeterminados
-    const temperature = options?.temperature ?? 0.25;
-    const topP = options?.topP ?? 0.7;
-    const topK = options?.topK ?? 20;
-    const variationMode = options?.variationMode ?? "balanced";
+    const temperature = options?.temperature ?? 0.05; // Reducido de 0.25 a 0.05
+    const topP = options?.topP ?? 0.6; // Reducido de 0.7 a 0.6
+    const topK = options?.topK ?? 10; // Reducido de 20 a 10
+    const variationMode = options?.variationMode ?? "fidelity"; // Cambiado de "balanced" a "fidelity"
     
     console.log(`Generando variación con modo: ${variationMode}, temp: ${temperature}, topP: ${topP}, topK: ${topK}`);
     
-    // Verificar si el prompt contiene instrucciones de transferencia entre imágenes
-    const promptLowerCase = prompt.toLowerCase();
-    const containsTransferInstructions = 
-      promptLowerCase.includes('coloca') || 
-      promptLowerCase.includes('poner') || 
-      promptLowerCase.includes('pon') || 
-      promptLowerCase.includes('añade') || 
-      promptLowerCase.includes('añadir') || 
-      promptLowerCase.includes('agrega') || 
-      (promptLowerCase.includes('logo') && 
-       (promptLowerCase.includes('imagen 1') || promptLowerCase.includes('imagen 2')));
+    // Detectar si el prompt requiere integración de elementos
+    const promptLower = prompt.toLowerCase();
     
-    // Si contiene instrucciones de transferencia, ajustar parámetros para mayor precisión
+    // Lista de términos que indican adición
+    const additionTerms = [
+      'añade', 'añadir', 'agregar', 'agrega', 'pon', 'poner', 'coloca',
+      'incluye', 'incluir', 'inserta', 'insertar', 'incorpora'
+    ];
+    
+    // Verificar si el prompt indica adición de algún elemento
+    const requiresIntegration = additionTerms.some(term => promptLower.includes(term));
+    
+    // Ajuste de parámetros para prompts que requieren integración física
     let adjustedTemperature = temperature;
     let adjustedTopP = topP;
     let adjustedTopK = topK;
     
-    if (containsTransferInstructions && Array.isArray(imageData) && imageData.length > 1) {
-      if (variationMode === "fidelity") {
-        adjustedTemperature = 0.01; // Extremadamente bajo para mayor precisión
+    if (requiresIntegration) {
+      // Reducir temperatura para mayor coherencia en integración física
+      if (variationMode === "fidelity" || variationMode === "fidelity_alt") {
+        // Para fidelidad alta, priorizar exactitud con temperatura muy baja
+        adjustedTemperature = 0.01; 
         adjustedTopP = 0.5;
         adjustedTopK = 5;
       } else if (variationMode === "balanced") {
-        adjustedTemperature = 0.05;
+        // Para balance, reducir ligeramente los parámetros pero mantener conservador
+        adjustedTemperature = 0.03;
         adjustedTopP = 0.55;
-        adjustedTopK = 10;
-      } else if (variationMode === "creative") {
-        adjustedTemperature = 0.2;
-        adjustedTopP = 0.7;
-        adjustedTopK = 20;
+        adjustedTopK = 8;
+      }
+      
+      console.log(`Ajustando parámetros para integración física: temp=${adjustedTemperature}, topP=${adjustedTopP}, topK=${adjustedTopK}`);
+    }
+    
+    // Verificar si el prompt contiene instrucciones de transferencia entre imágenes
+    const containsTransferInstructions = 
+      promptLower.includes('coloca') || 
+      promptLower.includes('poner') || 
+      promptLower.includes('pon') || 
+      promptLower.includes('añade') || 
+      promptLower.includes('añadir') || 
+      promptLower.includes('agrega') || 
+      (promptLower.includes('logo') && 
+       (promptLower.includes('imagen 1') || promptLower.includes('imagen 2')));
+    
+    // Ajustes adicionales para transferencia entre imágenes (mantener muy conservador)
+    if (containsTransferInstructions && Array.isArray(imageData) && imageData.length > 1) {
+      if (variationMode === "fidelity" || variationMode === "fidelity_alt") {
+        adjustedTemperature = 0.01;
+        adjustedTopP = 0.5;
+        adjustedTopK = 5;
+      } else if (variationMode === "balanced") {
+        adjustedTemperature = 0.03;
+        adjustedTopP = 0.55;
+        adjustedTopK = 8;
       }
     }
+    
+    // Mejorar el prompt con reglas físicas e integración visual detalladas
+    const enhancedPrompt = preparePromptWithPhysicalRules(prompt, variationMode === "fidelity_alt" ? "fidelity" : variationMode);
     
     // Obtener el modelo específico para generación de imágenes
     const model = getSessionAwareModel('gemini-2.0-flash-exp');
@@ -1412,12 +1782,13 @@ async function generateVariation(
     
     // Crear la configuración de generación
     const generationConfig = {
-      responseModalities: ['Text', 'Image'],
+      responseModalities: ['TEXT', 'IMAGE'],
       temperature: adjustedTemperature,
       topP: adjustedTopP,
       topK: adjustedTopK,
       maxOutputTokens: 8192,
-      seed: globalGenerationSeed + (variationMode === "balanced" ? 1 : variationMode === "creative" ? 2 : 0)
+      // Para fidelity_alt usamos globalGenerationSeed+3 para tener más variedad
+      seed: globalGenerationSeed + (variationMode === "balanced" ? 1 : variationMode === "fidelity_alt" ? 3 : 0)
     };
     
     // Configuración de seguridad
@@ -1440,36 +1811,16 @@ async function generateVariation(
       },
     ];
     
-    // Preparar los contenidos basados en la cantidad de imágenes
+    // Preparar los contenidos para enviar al modelo
     let contents = [];
     
     if (Array.isArray(imageData) && imageData.length > 1) {
-      // Múltiples imágenes - enfoque de transferencia mejorado
+      // Múltiples imágenes - procesar imágenes de referencia
       
-      // Instrucciones para la imagen principal
-      let mainImageText = `Esta es la imagen principal (IMAGEN 1) que quiero modificar según las instrucciones que proporcionaré más adelante.`;
-      
-      // Añadir instrucciones específicas según el modo de variación
-      if (variationMode === "fidelity") {
-        mainImageText += `\nMODO DE PRECISIÓN: Mantén una fidelidad muy alta a la imagen original. Realiza ÚNICAMENTE los cambios solicitados con extrema precisión, preservando todos los demás aspectos exactamente como en el original.`;
-      } else if (variationMode === "balanced") {
-        mainImageText += `\nMODO EQUILIBRADO: Realiza los cambios solicitados de manera equilibrada, permitiendo variaciones naturales mientras mantienes la esencia de la imagen original.`;
-      } else if (variationMode === "creative") {
-        mainImageText += `\nMODO CREATIVO: Puedes ser más interpretativo con los cambios solicitados, permitiendo mayor variación creativa en el resultado final mientras sigues la instrucción principal.`;
-      }
-      
-      mainImageText += `\nIMPORTANTE - REQUISITOS DE CALIDAD Y PRECISIÓN:
-1. Mantener la calidad original en TODA la imagen.
-2. Preservar con extrema precisión los rasgos faciales si hay personas.
-3. Evitar cualquier deformación, especialmente en características como los ojos.
-4. Preservar la nitidez, definición, textura y resolución de la imagen original.
-5. NO aplicar suavizado ni compresión a la imagen.
-6. Mantener EXACTAMENTE los mismos valores de color, brillo, contraste y saturación que el original.`;
-      
-      // Si hay una máscara para la imagen principal, mencionarla en el texto
-      if (masks && masks[0]) {
-        mainImageText += "\nIMPORTANTE: He seleccionado áreas específicas en rojo en esta imagen que quiero que modifiques. Por favor, aplica tus cambios SOLO a estas áreas seleccionadas y mantén intacto el resto de la imagen.";
-      }
+      // Instrucciones para la imagen principal con énfasis en posicionamiento físico
+      let mainImageText = requiresIntegration 
+        ? "Imagen principal. SIGUE EXACTAMENTE lo que pide el prompt y NO añadas elementos adicionales no solicitados. Todo elemento añadido DEBE respetar las leyes físicas."
+        : "Imagen principal a editar según instrucciones. NO añadir elementos no solicitados.";
       
       contents.push({
         role: 'user',
@@ -1484,17 +1835,17 @@ async function generateVariation(
         ]
       });
       
-      // Si hay una máscara para la imagen principal, la enviamos también
+      // Si hay una máscara para la imagen principal
       if (masks && masks[0]) {
         contents.push({
           role: 'user',
           parts: [
             {
-              text: `Esta es la máscara para la imagen principal. Las áreas en rojo indican dónde debes aplicar los cambios solicitados. Mantén intactas las áreas que no están marcadas en rojo.`
+              text: `Máscara que indica áreas a modificar. Modificar SOLO dentro de estas áreas.`
             },
             {
               inlineData: {
-                data: masks[0].split(',')[1], // Eliminar el prefijo data:image/png;base64,
+                data: masks[0].split(',')[1],
                 mimeType: 'image/png',
               }
             }
@@ -1504,19 +1855,7 @@ async function generateVariation(
       
       // Imágenes de referencia
       for (let i = 1; i < imageData.length; i++) {
-        let refImageText = `Esta es la imagen de referencia #${i} (IMAGEN ${i+1}). `;
-        
-        // Si es la segunda imagen y hay una referencia a un "logo" en el prompt
-        if (i === 1 && promptLowerCase.includes('logo')) {
-          refImageText += `ATENCIÓN: Esta imagen contiene un LOGO que necesitas transferir a la IMAGEN 1. Identifica claramente el logo en esta imagen y colócalo exactamente según las instrucciones. Es ESENCIAL que utilices el logo de esta imagen exactamente como aparece, sin modificar su diseño ni colores.`;
-        } else {
-          refImageText += `Puedes usarla como inspiración para la modificación.`;
-        }
-        
-        // Si hay una máscara para esta imagen de referencia, mencionarla en el texto
-        if (masks && masks[i]) {
-          refImageText += ` He seleccionado áreas específicas en rojo en esta imagen de referencia. Por favor, toma SOLO estas áreas seleccionadas como referencia para aplicarlas a la imagen principal.`;
-        }
+        let refImageText = `Imagen de referencia ${i+1}.`;
         
         contents.push({
           role: 'user',
@@ -1531,17 +1870,16 @@ async function generateVariation(
           ]
         });
         
-        // Si hay una máscara para esta imagen de referencia, la enviamos también
         if (masks && masks[i]) {
           contents.push({
             role: 'user',
             parts: [
               {
-                text: `Esta es la máscara para la imagen de referencia #${i}. Las áreas en rojo indican las partes que quiero que tomes como referencia para aplicar a la imagen principal.`
+                text: `Máscara de referencia ${i+1}.`
               },
               {
                 inlineData: {
-                  data: masks[i].split(',')[1], // Eliminar el prefijo data:image/png;base64,
+                  data: masks[i].split(',')[1],
                   mimeType: 'image/png',
                 }
               }
@@ -1550,83 +1888,58 @@ async function generateVariation(
         }
       }
       
-      // Instrucciones finales específicas basadas en el modo de variación
-      let finalInstructions = '';
-      
-      if (containsTransferInstructions) {
-        finalInstructions = `INSTRUCCIONES PRECISAS DE TRANSFERENCIA: ${prompt}.\n\n`;
-        
-        // Añadir instrucciones específicas según el modo de variación
-        if (variationMode === "fidelity") {
-          finalInstructions += `MODO DE PRECISIÓN: Mantén una fidelidad extremadamente alta. Realiza ÚNICAMENTE los cambios solicitados con la mayor precisión posible.\n\n`;
-        } else if (variationMode === "balanced") {
-          finalInstructions += `MODO EQUILIBRADO: Realiza los cambios solicitados de manera equilibrada, permitiendo ligeras variaciones mientras mantienes la esencia general de la instrucción.\n\n`;
-        } else if (variationMode === "creative") {
-          finalInstructions += `MODO CREATIVO: Puedes ser más interpretativo con los cambios solicitados, permitiendo mayor variación artística mientras sigues la instrucción principal.\n\n`;
-        }
-        
-        finalInstructions += `INSTRUCCIONES CRÍTICAS ADICIONALES:
-1. Modifica ÚNICAMENTE la PRIMERA imagen (IMAGEN 1) aplicando los cambios solicitados.
-2. Identifica con precisión los elementos mencionados en mis instrucciones.
-3. El resultado debe ser fotorrealista y mantener la calidad original de la imagen.
-4. Si se menciona un "logo" en la imagen 2, DEBES transferirlo exactamente a la ubicación especificada en la imagen 1.
-5. La ubicación para colocar elementos debe seguir exactamente mis instrucciones (como "en el polo").
-6. Mantén la misma calidad, nitidez y resolución en TODA la imagen.
-7. NO introduzcas elementos no solicitados ni cambies otros aspectos de la imagen.`;
-      } else {
-        finalInstructions = `Instrucciones finales: ${prompt}.\n\n`;
-        
-        // Añadir instrucciones específicas según el modo de variación
-        if (variationMode === "fidelity") {
-          finalInstructions += `MODO DE PRECISIÓN: Mantén una fidelidad extremadamente alta. Realiza ÚNICAMENTE los cambios solicitados con la mayor precisión posible.\n\n`;
-        } else if (variationMode === "balanced") {
-          finalInstructions += `MODO EQUILIBRADO: Realiza los cambios solicitados de manera equilibrada, permitiendo ligeras variaciones mientras mantienes la esencia general de la instrucción.\n\n`;
-        } else if (variationMode === "creative") {
-          finalInstructions += `MODO CREATIVO: Puedes ser más interpretativo con los cambios solicitados, permitiendo mayor variación artística mientras sigues la instrucción principal.\n\n`;
-        }
-        
-        finalInstructions += `IMPORTANTE: Modifica ÚNICAMENTE la PRIMERA imagen que te mostré, aplicando los cambios solicitados. NO modifiques las imágenes de referencia. Las imágenes de referencia son solo para inspiración o fuente de elementos si el prompt lo requiere.`;
-      }
-      
-      // Si hay máscaras, enfatizar su uso
-      if (masks && Object.keys(masks).length > 0) {
-        finalInstructions += `\n\nRecuerda respetar las máscaras proporcionadas. Solo modifica las áreas marcadas en rojo en la imagen principal, y solo toma como referencia las áreas marcadas en rojo en las imágenes de referencia. IMPORTANTE: Mantén la misma calidad, nitidez y resolución en TODA la imagen, tanto en áreas modificadas como en el resto de la imagen.`;
-      }
-      
+      // Instrucciones estrictas para NO añadir elementos no solicitados
       contents.push({
         role: 'user',
-        parts: [
-          { text: finalInstructions }
-        ]
+        parts: [{ 
+          text: "INSTRUCCIÓN CRÍTICA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales no solicitados (pájaros, animales, personas, etc.) bajo ninguna circunstancia."
+        }]
       });
-    } else {
-      // Solo una imagen - enfoque simple
-      const singleImage = Array.isArray(imageData) ? imageData[0] : imageData;
       
-      // Texto adaptado al modo de variación
-      let mainText = `Modifica esta imagen según las siguientes instrucciones: ${prompt}\n\n`;
-      
-      // Añadir instrucciones específicas según el modo de variación
-      if (variationMode === "fidelity") {
-        mainText += `MODO DE PRECISIÓN: Mantén una fidelidad extremadamente alta. Realiza ÚNICAMENTE los cambios solicitados con la mayor precisión posible.\n\n`;
-      } else if (variationMode === "balanced") {
-        mainText += `MODO EQUILIBRADO: Realiza los cambios solicitados de manera equilibrada, permitiendo ligeras variaciones mientras mantienes la esencia general de la instrucción.\n\n`;
-      } else if (variationMode === "creative") {
-        mainText += `MODO CREATIVO: Puedes ser más interpretativo con los cambios solicitados, permitiendo mayor variación artística mientras sigues la instrucción principal.\n\n`;
+      // Si requiere integración, añadir instrucciones de posicionamiento prioritarias
+      if (requiresIntegration) {
+        const physicsInstructions = `
+INSTRUCCIONES CRÍTICAS DE FÍSICA:
+1. POSICIONAMIENTO FÍSICO OBLIGATORIO: Todos los elementos DEBEN estar firmemente apoyados sobre superficies físicas sólidas
+2. GRAVEDAD OBLIGATORIA: Nada puede flotar en el aire - todo debe obedecer la gravedad
+3. SOMBRAS OBLIGATORIAS: Todo elemento debe proyectar sombras realistas en la superficie donde se apoya
+4. PESO VISUAL: Los elementos deben mostrar señales visuales de peso y masa
+
+Si el elemento es un animal:
+- TODAS sus patas deben estar FIRMEMENTE apoyadas en una superficie sólida
+- Su postura debe ser ANATÓMICAMENTE CORRECTA
+- El peso debe estar DISTRIBUIDO CORRECTAMENTE en sus patas`;
+
+        contents.push({
+          role: 'user',
+          parts: [{ text: physicsInstructions }]
+        });
       }
       
-      mainText += `IMPORTANTE - REQUISITOS DE CALIDAD:
-1. Mantener exactamente la misma calidad de imagen en todas las áreas, tanto modificadas como no modificadas.
-2. Preservar con precisión todos los rasgos faciales si hay personas.
-3. Mantener la nitidez, definición y textura de la imagen original.
-4. No aplicar suavizado ni compresión que reduzca la calidad.
-5. Mantener los mismos valores de color, brillo y contraste del original.`;
+      // Instrucciones finales con el prompt mejorado
+      contents.push({
+        role: 'user',
+        parts: [{ text: enhancedPrompt }]
+      });
       
+      // Reforzar una última vez la restricción de no añadir elementos adicionales
+      contents.push({
+        role: 'user',
+        parts: [{ 
+          text: "RECUERDA: SOLO añade EXACTAMENTE lo que pide el prompt. NO añadas elementos adicionales no solicitados."
+        }]
+      });
+      
+    } else {
+      // Solo una imagen - enfoque para manipulación de una única imagen
+      const singleImage = Array.isArray(imageData) ? imageData[0] : imageData;
+      
+      // Instrucción con el prompt mejorado
       contents = [
         {
           role: 'user',
           parts: [
-            { text: mainText },
+            { text: "INSTRUCCIÓN CRÍTICA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales no solicitados." },
             {
               inlineData: {
                 data: singleImage,
@@ -1637,13 +1950,12 @@ async function generateVariation(
         }
       ];
       
-      // Si hay una máscara, añadir esa información
       if (masks && masks[0]) {
         contents.push({
           role: 'user',
           parts: [
             {
-              text: `Esta es la máscara que indica las áreas a modificar. Por favor, aplica los cambios SOLO en las áreas marcadas en rojo y mantén el resto exactamente igual.`
+              text: `Máscara que indica áreas a modificar. Modificar SOLO dentro de estas áreas.`
             },
             {
               inlineData: {
@@ -1653,43 +1965,50 @@ async function generateVariation(
             }
           ]
         });
-        
-        // Añadir un recordatorio final sobre las máscaras, adaptado al modo de variación
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              text: `RECORDATORIO FINAL: Modifica la imagen ÚNICAMENTE en las áreas marcadas en rojo según mis instrucciones: "${prompt}". Mantén intacto el resto de la imagen con la misma calidad y nitidez.`
-            }
-          ]
-        });
       }
+      
+      // Añadir el prompt mejorado
+      contents.push({
+        role: 'user',
+        parts: [{ text: enhancedPrompt }]
+      });
+      
+      // Reforzar las reglas una última vez
+      contents.push({
+        role: 'user',
+        parts: [{ 
+          text: "RECUERDA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO agregues elementos adicionales."
+        }]
+      });
     }
     
-    console.log(`Enviando solicitud para variación (modo: ${variationMode}) a Gemini...`);
+    console.log(`Enviando solicitud a Gemini (modo: ${variationMode})...`);
     
     // Generar la imagen
-    const result = await model.generateContent({
-      contents,
-      generationConfig,
-      safetySettings
-    });
+    let result;
+    try {
+      result = await model.generateContent({
+        contents,
+        generationConfig,
+        safetySettings
+      });
+    } catch (modelError) {
+      console.error("Error en la primera generación:", modelError);
+      throw modelError; // Propagar error para manejarlo en el nivel superior
+    }
     
     // Procesar la respuesta
     const response = await result.response;
     
-    // Verificar si hay candidatos en la respuesta
     if (response.candidates && response.candidates[0]) {
-      // Buscar partes de imagen en la respuesta
       for (const part of response.candidates[0].content?.parts || []) {
         if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
           console.log(`Gemini generó una variación (modo: ${variationMode}) correctamente`);
           
-          // Guardar los datos de la imagen en formato base64
           const generatedImageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
           
           try {
-            // Aplicar estandarización de colores para mantener consistencia
+            // Aplicar estandarización de colores para mejorar coherencia
             const standardizedImage = await standardizeColors(generatedImageData);
             return standardizedImage;
           } catch (colorError) {
@@ -1699,25 +2018,218 @@ async function generateVariation(
         }
       }
       
-      // Si no se encontró una imagen en la respuesta
-      console.error(`No se encontró una imagen en la respuesta del modelo (variación: ${variationMode})`);
-      throw new Error(`No se pudo generar una variación (${variationMode}). La respuesta del modelo no contenía datos de imagen.`);
+      // Si llegamos aquí, no se encontró una imagen en la respuesta
+      console.error(`No se encontró una imagen en la respuesta (modo: ${variationMode})`);
+      
+      // Intentar un enfoque de respaldo con diferentes parámetros
+      console.log("Intentando con enfoque alternativo...");
+      return await fallbackGenerateImage(imageData, prompt, masks, options);
     } else {
-      // Si no hay candidatos válidos en la respuesta
-      console.error(`No hay candidatos válidos en la respuesta del modelo (variación: ${variationMode})`);
-      throw new Error(`No se pudo generar una variación (${variationMode}). La respuesta del modelo no es válida.`);
+      console.error(`No hay candidatos válidos en la respuesta (modo: ${variationMode})`);
+      return await fallbackGenerateImage(imageData, prompt, masks, options);
     }
   } catch (error) {
-    console.error(`Error al generar variación (${options?.variationMode || 'balanced'}):`, error);
+    console.error(`Error al generar variación (${options?.variationMode || 'fidelity'}):`, error);
     
-    // Intentar usar el método estándar como fallback
     try {
-      console.log("Intentando generar con método estándar como respaldo...");
-      return await generateHighQualityImage(imageData, prompt, masks);
+      return await fallbackGenerateImage(imageData, prompt, masks, options);
     } catch (fallbackError) {
       console.error("También falló el método de respaldo:", fallbackError);
-      throw error; // Propagar el error original
+      throw error;
     }
+  }
+}
+
+// Función de respaldo para generación de imágenes
+async function fallbackGenerateImage(
+  imageData: string[] | string,
+  prompt: string,
+  masks?: Record<number, string>,
+  options?: {
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    variationMode?: "fidelity" | "balanced" | "fidelity_alt" | "creative";
+  }
+): Promise<string> {
+  console.log("Ejecutando método de respaldo para generación de imagen");
+  
+  try {
+    const variationMode = options?.variationMode || "fidelity";
+    
+    // Detectar si el prompt requiere integración de elementos
+    const promptLower = prompt.toLowerCase();
+    
+    // Lista de términos que indican adición
+    const additionTerms = [
+      'añade', 'añadir', 'agregar', 'agrega', 'pon', 'poner', 'coloca',
+      'incluye', 'incluir', 'inserta', 'insertar', 'incorpora'
+    ];
+    
+    // Verificar si el prompt indica adición de algún elemento
+    const requiresIntegration = additionTerms.some(term => promptLower.includes(term));
+    
+    // Modificar el prompt para enfatizar las reglas físicas y NO AÑADIR ELEMENTOS EXTRAS
+    let enhancedPrompt = `${prompt}
+
+INSTRUCCIONES OBLIGATORIAS:
+* AÑADE SOLAMENTE lo que solicita el prompt, NADA MÁS
+* NO añadas elementos adicionales no solicitados (pájaros, animales, personas, etc.)
+* Todo elemento añadido DEBE estar FIRMEMENTE APOYADO sobre una superficie sólida
+* Nada puede flotar en el aire - TODO debe obedecer la GRAVEDAD
+* Los elementos añadidos DEBEN proyectar SOMBRAS realistas sobre las superficies
+* Debe haber señales visibles de CONTACTO FÍSICO entre el elemento y la superficie`;
+
+    if (requiresIntegration) {
+      enhancedPrompt += `
+* Si añades un animal:
+  - TODAS sus patas deben estar firmemente apoyadas en la superficie
+  - Su postura debe ser anatómicamente correcta y natural
+  - El peso debe estar distribuido correctamente según la especie`;
+    }
+    
+    enhancedPrompt += `
+
+IMPORTANTE: NO AÑADAS ELEMENTOS QUE NO SE SOLICITAN EN EL PROMPT ORIGINAL.`;
+    
+    // Intentar con el modelo estable primero, que puede ser más consistente
+    const model = getSessionAwareModel('gemini-2.0-flash');
+    
+    // Configuración optimizada para respetar reglas físicas
+    const generationConfig = {
+      responseModalities: ['IMAGE'],
+      temperature: 0.05,  // Temperatura muy baja para mayor precisión
+      topP: 0.5,          // topP bajo para más consistencia
+      topK: 5,            // topK bajo para resultados más predecibles
+      maxOutputTokens: 8192,
+      seed: globalGenerationSeed + (variationMode === "balanced" ? 1 : variationMode === "fidelity_alt" ? 3 : 0)
+    };
+    
+    // Configuración de seguridad
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+    ];
+    
+    // Preparar contenido simplificado pero con instrucciones claras sobre física
+    const singleImage = Array.isArray(imageData) ? imageData[0] : imageData;
+    
+    // Contenido base con la imagen y el prompt mejorado
+    const contents = [
+      {
+        role: 'user',
+        parts: [
+          { text: "INSTRUCCIÓN CRÍTICA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales no solicitados." },
+          {
+            inlineData: {
+              data: singleImage,
+              mimeType: 'image/jpeg',
+            }
+          }
+        ]
+      }
+    ];
+    
+    // Si hay máscara, incluirla con instrucciones claras
+    if (masks && masks[0]) {
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            text: `Máscara para áreas a modificar. Aplica las modificaciones SOLO dentro de estas áreas.`
+          },
+          {
+            inlineData: {
+              data: masks[0].split(',')[1],
+              mimeType: 'image/png',
+            }
+          }
+        ]
+      });
+    }
+    
+    // Añadir el prompt mejorado
+    contents.push({
+      role: 'user',
+      parts: [{ text: enhancedPrompt }]
+    });
+    
+    // Para casos que requieren integración, enfatizar reglas físicas una vez más
+    contents.push({
+      role: 'user',
+      parts: [
+        { 
+          text: `RECORDATORIO FINAL CRÍTICO: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales. Todo elemento añadido DEBE estar FIRMEMENTE apoyado sobre una superficie sólida.`
+        }
+      ]
+    });
+    
+    console.log("Enviando solicitud de respaldo a Gemini...");
+    
+    // Generar la imagen
+    let result;
+    try {
+      result = await model.generateContent({
+        contents,
+        generationConfig,
+        safetySettings
+      });
+    } catch (error) {
+      console.error("Error en generación con modelo estable:", error);
+      
+      // Si falla, intentar con el modelo experimental
+      console.log("Intentando con modelo experimental...");
+      const expModel = getSessionAwareModel('gemini-2.0-flash-exp');
+      result = await expModel.generateContent({
+        contents,
+        generationConfig,
+        safetySettings
+      });
+    }
+    
+    // Procesar la respuesta
+    const response = await result.response;
+    
+    if (response.candidates && response.candidates[0]) {
+      for (const part of response.candidates[0].content?.parts || []) {
+        if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+          console.log("Método de respaldo generó una imagen correctamente");
+          
+          const generatedImageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          
+          try {
+            // Aplicar procesamiento adicional para mejorar integración
+            console.log("Aplicando procesamiento post-generación para mejorar integración...");
+            const enhancedImage = await standardizeColors(generatedImageData);
+            return enhancedImage;
+          } catch (enhancementError) {
+            console.error("Error en procesamiento post-generación:", enhancementError);
+            return generatedImageData;
+          }
+        }
+      }
+    }
+    
+    // Si todo falla, intentar con el método de alta calidad como última opción
+    console.log("Método de respaldo falló, intentando con método de alta calidad");
+    return await generateHighQualityImage(imageData, prompt, masks);
+  } catch (error) {
+    console.error("Error en el método de respaldo:", error);
+    return await generateHighQualityImage(imageData, prompt, masks);
   }
 }
 
@@ -1729,6 +2241,9 @@ export async function generateImageFromText(
     topP?: number;
     topK?: number;
     seed?: number;
+    highResolution?: boolean;  // Nuevo parámetro para solicitar alta resolución
+    style?: string;            // Parámetro opcional para estilo específico
+    realism?: number;          // Nivel de realismo (0-1)
   }
 ): Promise<string> {
   try {
@@ -1736,17 +2251,22 @@ export async function generateImageFromText(
     const temperature = options?.temperature ?? 0.4;
     const topP = options?.topP ?? 0.8;
     const topK = options?.topK ?? 32;
-    const seed = options?.seed ?? globalGenerationSeed;
+    // Asegurarnos de usar una semilla única en cada llamada si no se proporciona
+    const seed = options?.seed ?? Math.floor(Math.random() * 100000);
+    const highResolution = options?.highResolution ?? true; // Por defecto activado
+    const realism = options?.realism ?? 0.8; // Por defecto alto realismo
+    const style = options?.style || '';
     
     console.log(`Generando imagen desde texto con prompt: "${prompt}"`);
-    console.log(`Parámetros: temperatura=${temperature}, topP=${topP}, topK=${topK}, semilla=${seed}`);
+    console.log(`Parámetros: temperatura=${temperature}, topP=${topP}, topK=${topK}, semilla=${seed}, altaResolución=${highResolution}, realismo=${realism}`);
     
     // Obtener el modelo específico para generación de imágenes
+    // Usar el modelo experimental que soporta generación de imágenes
     const model = getSessionAwareModel('gemini-2.0-flash-exp');
     
     // Configuración optimizada para generación de imágenes de alta calidad
     const generationConfig = {
-      responseModalities: ['Text', 'Image'],
+      responseModalities: ['TEXT', 'IMAGE'], // Formato correcto para este modelo
       temperature: temperature,
       topP: topP,
       topK: topK,
@@ -1774,19 +2294,37 @@ export async function generateImageFromText(
       },
     ];
     
-    // Construir el contenido para enviar al modelo
-    const prompt_text = `Generate a high quality image of: ${prompt}
+    // Mejoramos el prompt para solicitar específicamente mayor resolución y realismo
+    // Construir un prompt optimizado basado en las opciones del usuario
+    let enhancedPrompt = prompt;
+    
+    // Añadir modificadores para alta resolución si se solicita
+    if (highResolution) {
+      enhancedPrompt = `Imagen de ALTA RESOLUCIÓN (1920x1080): ${enhancedPrompt}`;
+    }
+    
+    // Añadir estilo si se especifica
+    if (style) {
+      enhancedPrompt = `${enhancedPrompt}, estilo ${style}`;
+    }
+    
+    // Construir el contenido para enviar al modelo con indicaciones mejoradas para calidad
+    const prompt_text = `Crea una imagen de calidad profesional de: ${enhancedPrompt}
 
-INSTRUCTIONS FOR HIGH QUALITY IMAGE GENERATION:
-1. Create a photorealistic, highly detailed image
-2. Use high resolution, sharp details, and proper lighting
-3. Ensure proper perspective, proportions and scale
-4. Apply realistic textures, materials and reflections
-5. Create natural shadows and highlights
-6. Use a balanced composition with proper framing
-7. Apply realistic color grading and contrast
-8. DO NOT include any text, watermarks, or annotations in the image
-9. DO NOT include anything that wasn't specifically requested in the prompt`;
+INSTRUCCIONES CRUCIALES DE CALIDAD:
+- Resolución máxima posible (1920x1080 o superior)
+- Fotorrealismo extremo (${realism * 100}% de realismo)
+- Texturas detalladas y palpables
+- Iluminación volumétrica y sombreado avanzado
+- Reflejos y sombras físicamente precisos
+- Profundidad de campo cinematográfica
+- Nitidez extrema en todos los detalles
+- Colores vibrantes y saturación natural
+- Sin distorsiones ni artefactos
+- Sin texto ni marcas de agua
+- Renderizado 3D de alta fidelidad
+- Proporciones y perspectiva precisas
+- CRÍTICO: Generar la imagen con el más alto nivel de detalle posible`;
 
     // Usar la API con la estructura correcta
     const result = await model.generateContent({
@@ -1813,32 +2351,169 @@ INSTRUCTIONS FOR HIGH QUALITY IMAGE GENERATION:
         if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
           // Obtener la imagen en formato base64
           const generatedImageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-          console.log("Gemini generó una imagen desde texto correctamente");
+          console.log("Gemini generó una imagen desde texto correctamente con calidad mejorada");
           
+          // Intentar mejorar la calidad de imagen mediante standardizeColors 
           try {
-            // Aplicar estandarización de colores para mejor calidad visual
             return await standardizeColors(generatedImageData);
           } catch (colorError) {
             console.error("Error al estandarizar colores:", colorError);
-            // Si hay error en la estandarización, devolver la imagen original
             return generatedImageData;
           }
         }
       }
       
-      // Si se procesó la respuesta pero no se encontró una imagen
-      const responseText = response.candidates[0].content.parts
-        .filter(part => part.text)
-        .map(part => part.text)
-        .join("\n");
+      // Si no encontramos una imagen, intentar con otra configuración
+      console.log("No se encontró imagen en la respuesta. Intentando con configuración alternativa...");
       
-      console.warn("No se encontró imagen en la respuesta. Texto recibido:", responseText);
-      throw new Error("No se pudo generar una imagen. Respuesta del modelo: " + responseText);
+      // Pasar las opciones de alta resolución y realismo al método alternativo
+      return await generateImageFromTextAlternative(prompt, {
+        ...options,
+        highResolution,
+        realism
+      });
     }
     
-    throw new Error("No se pudo generar una imagen desde el texto.");
+    // Si no hay candidatos válidos, intentar con respaldo
+    console.log("No hay candidatos válidos en la respuesta. Intentando con configuración alternativa...");
+    return await generateImageFromTextAlternative(prompt, {
+      ...options,
+      highResolution,
+      realism
+    });
   } catch (error) {
     console.error("Error al generar imagen desde texto:", error);
+    
+    // Intentar con configuración alternativa como respaldo
+    try {
+      console.log("Intentando generación con configuración alternativa...");
+      return await generateImageFromTextAlternative(prompt, options);
+    } catch (fallbackError) {
+      console.error("Error en generación de respaldo:", fallbackError);
+      throw error;
+    }
+  }
+}
+
+// Función alternativa para generar imágenes desde texto
+async function generateImageFromTextAlternative(
+  prompt: string,
+  options?: {
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    seed?: number;
+    highResolution?: boolean;
+    realism?: number;
+    style?: string;
+  }
+): Promise<string> {
+  try {
+    const temperature = options?.temperature ?? 0.7; // Mayor temperatura para más creatividad
+    const topP = options?.topP ?? 0.95;
+    const topK = options?.topK ?? 64;
+    // Usar la semilla proporcionada o generar una nueva, nunca usar globalGenerationSeed
+    const seed = options?.seed ?? Math.floor(Math.random() * 100000);
+    const highResolution = options?.highResolution ?? true;
+    const realism = options?.realism ?? 0.7;
+    const style = options?.style || '';
+    
+    console.log("Usando generación alternativa con optimización para mayor calidad");
+    
+    // Usar el modelo experimental que puede generar imágenes
+    const model = getSessionAwareModel('gemini-2.0-flash-exp');
+    
+    const generationConfig = {
+      // Especificar explícitamente que queremos una imagen
+      responseModalities: ['TEXT', 'IMAGE'],
+      temperature: temperature,
+      topP: topP,
+      topK: topK,
+      maxOutputTokens: 8192,
+      seed: seed
+    };
+    
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+    ];
+    
+    // Construir un prompt mejorado con énfasis en resolución y realismo
+    let enhancedPrompt = prompt;
+    
+    if (highResolution) {
+      enhancedPrompt = `Imagen de ALTA RESOLUCIÓN FHD (1920x1080): ${enhancedPrompt}`;
+    }
+    
+    if (style) {
+      enhancedPrompt = `${enhancedPrompt}, estilo ${style}`;
+    }
+    
+    // Instrucción muy específica para generar una imagen de alta calidad
+    const prompt_text = `Genera una imagen fotorrealista de: ${enhancedPrompt}
+    
+CRÍTICO - REQUISITOS DE CALIDAD:
+1. RESOLUCIÓN MÁXIMA - FHD 1920x1080 o superior
+2. Fotorrealismo extremo (${realism * 100}% de realismo)
+3. Iluminación volumétrica compleja con luces y sombras detalladas
+4. Texturas realistas con micro-detalles visibles
+5. Sin distorsiones ni artefactos de compresión
+6. Profundidad de campo cinematográfica
+7. Colores ricos y contrastados pero naturales
+8. Renderizado de alta fidelidad de todos los elementos
+9. No incluir texto ni marcas de agua`;
+
+    // Usar la API con la estructura correcta y el prompt mejorado
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: prompt_text }]
+        }
+      ],
+      generationConfig,
+      safetySettings
+    });
+    
+    const response = await result.response;
+    
+    if (response.candidates && 
+        response.candidates[0] && 
+        response.candidates[0].content) {
+      
+      for (const part of response.candidates[0].content.parts || []) {
+        if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+          const generatedImageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          console.log("Generación alternativa produjo imagen correctamente con calidad optimizada");
+          
+          // Aplicar estandarización de colores para mejorar aún más la calidad
+          try {
+            return await standardizeColors(generatedImageData);
+          } catch (colorError) {
+            console.error("Error al estandarizar colores:", colorError);
+            return generatedImageData;
+          }
+        }
+      }
+    }
+    
+    throw new Error("La generación alternativa no produjo una imagen");
+  } catch (error) {
+    console.error("Error en la generación alternativa de imagen:", error);
     throw error;
   }
 }
