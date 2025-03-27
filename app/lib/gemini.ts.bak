@@ -1,0 +1,49 @@
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+
+// API key 
+const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || 'API_KEY_HERE';
+
+export const genAI = new GoogleGenerativeAI(API_KEY);
+
+// Definimos un valor de semilla global para consistencia entre generaciones
+export let globalGenerationSeed = Date.now() % 10000;
+let seedLocked = false;
+
+// Interfaces necesarias
+interface Part {
+  text?: string;
+  inline_data?: {
+    mime_type: string;
+    data: string;
+  };
+}
+
+// Configuración de seguridad
+export const safetySettings = [
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+];
+
+// Variable para almacenar la configuración de generación global
+export const generationConfig = {
+  responseModalities: ['Text', 'Image'],
+  temperature: 0.2,
+  topP: 0.8,
+  topK: 35,
+  maxOutputTokens: 8192,
+  seed: globalGenerationSeed
+};
