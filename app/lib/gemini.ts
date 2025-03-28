@@ -2517,3 +2517,170 @@ CRÍTICO - REQUISITOS DE CALIDAD:
     throw error;
   }
 }
+
+// Función para mantener una conversación en tiempo real con imágenes
+export async function realTimeChatWithImage(
+  message: string,
+  imageData?: string,
+  history?: Array<{role: string, parts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}>}>,
+): Promise<{
+  text?: string,
+  imageData?: string,
+  history: Array<{role: string, parts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}>}>
+}> {
+  try {
+    // Obtener el modelo adecuado para chat con imágenes
+    const model = getSessionAwareModel('gemini-2.0-flash-exp-image-generation');
+    
+    // Configuración para generación de respuestas que pueden incluir imágenes
+    const generationConfig = {
+      responseModalities: ['TEXT', 'IMAGE'], // Especificar que queremos texto e imagen
+      temperature: 0.4,
+      topP: 0.8,
+      topK: 35,
+      maxOutputTokens: 8192,
+      seed: Math.floor(Math.random() * 100000) // Semilla aleatoria para variedad
+    };
+    
+    // Configuración de seguridad
+    const safetySettings = [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      },
+    ];
+    
+    // Preparar el historial de conversación o iniciarlo si no existe
+    let chatHistory = history || [];
+    
+    // Preparar el mensaje del usuario
+    let userMessageParts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}> = [];
+    
+    // Si hay texto, añadirlo a las partes
+    if (message) {
+      userMessageParts.push({ text: message });
+    }
+    
+    // Si hay imagen, añadirla a las partes
+    if (imageData) {
+      // Extraer el tipo MIME y los datos base64 de la cadena dataURL
+      const matches = imageData.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      
+      if (matches && matches.length === 3) {
+        const mimeType = matches[1];
+        const base64Data = matches[2];
+        
+        userMessageParts.push({
+          inlineData: {
+            mimeType: mimeType,
+            data: base64Data
+          }
+        });
+      } else {
+        console.error("Formato de datos de imagen no válido");
+        throw new Error("Formato de datos de imagen no válido");
+      }
+    }
+    
+    // Añadir el mensaje del usuario al historial
+    chatHistory.push({
+      role: 'user',
+      parts: userMessageParts
+    });
+    
+    console.log("Enviando mensaje a Gemini con historial de", chatHistory.length, "mensajes");
+    
+    // Convertir el historial de chat al formato esperado por la API de Gemini
+    const formattedContents = chatHistory.map(msg => ({
+      role: msg.role,
+      parts: msg.parts.map(part => {
+        if (part.text) {
+          return { text: part.text };
+        } else if (part.inlineData) {
+          return { 
+            inlineData: { 
+              mimeType: part.inlineData.mimeType, 
+              data: part.inlineData.data 
+            } 
+          };
+        }
+        return { text: "" }; // Parte vacía por defecto
+      })
+    }));
+    
+    // Enviar el historial formateado al modelo
+    const result = await model.generateContent({
+      contents: formattedContents,
+      generationConfig,
+      safetySettings
+    });
+    
+    const response = await result.response;
+    
+    // Verificar si hay contenido en la respuesta
+    if (!response.candidates || !response.candidates[0] || !response.candidates[0].content) {
+      throw new Error("No se recibió una respuesta válida del modelo");
+    }
+    
+    // Extraer las partes de la respuesta del modelo
+    const modelResponse = response.candidates[0].content;
+    
+    // Convertir las partes del modelo al formato de nuestro historial
+    const modelResponseParts = modelResponse.parts.map(part => {
+      if (part.text) {
+        return { text: part.text };
+      } else if (part.inlineData) {
+        return {
+          inlineData: {
+            mimeType: part.inlineData.mimeType,
+            data: part.inlineData.data
+          }
+        };
+      }
+      return { text: "" }; // Parte vacía por defecto
+    });
+    
+    // Añadir la respuesta al historial
+    chatHistory.push({
+      role: 'model',
+      parts: modelResponseParts
+    });
+    
+    // Preparar el objeto de respuesta
+    let responseObj: {
+      text?: string,
+      imageData?: string,
+      history: typeof chatHistory
+    } = {
+      history: chatHistory
+    };
+    
+    // Extraer texto e imagen de la respuesta
+    for (const part of modelResponse.parts) {
+      if (part.text) {
+        responseObj.text = part.text;
+      } else if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+        responseObj.imageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+      }
+    }
+    
+    console.log("Respuesta de Gemini procesada correctamente");
+    return responseObj;
+    
+  } catch (error) {
+    console.error("Error en la conversación en tiempo real:", error);
+    throw error;
+  }
+}
