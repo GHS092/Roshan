@@ -10,6 +10,7 @@ import SeedControl from './components/SeedControl';
 import MaskInfo from './components/MaskInfo';
 import TabSwitcher from './components/TabSwitcher';
 import TextToImageGenerator from './components/TextToImageGenerator';
+import RealTimeChat from './components/RealTimeChat';
 import { 
   generateImageFromPrompt, 
   generateHighQualityImage, 
@@ -396,7 +397,7 @@ const translateToEnglish = (prompt: string): string => {
 
 export default function Home() {
   // Estado para controlar qué pestaña está activa
-  const [activeTab, setActiveTab] = useState('edit'); // 'edit' o 'generate'
+  const [activeTab, setActiveTab] = useState('edit'); // 'edit' o 'generate' o 'realtime'
   
   // Estados existentes
   const [images, setImages] = useState<string[]>([]);
@@ -725,11 +726,20 @@ export default function Home() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
       )
+    },
+    {
+      id: 'realtime',
+      label: 'Chat en Tiempo Real',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+        </svg>
+      )
     }
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-indigo-50/30 to-purple-50/30">
+    <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-white dark:from-gray-900 dark:to-gray-800 text-gray-900 dark:text-gray-100">
       <Toaster position="top-right" />
       
       {/* Fondo con formas decorativas */}
@@ -926,9 +936,12 @@ export default function Home() {
             )}
           </div>
         </div>
-        ) : (
-          // Contenido nuevo para generación de imágenes desde texto
+        ) : activeTab === 'generate' ? (
+          // Contenido para generación de imágenes desde texto
           <TextToImageGenerator />
+        ) : (
+          // Nuevo contenido para chat en tiempo real
+          <RealTimeChat />
         )}
 
         {/* Footer */}
