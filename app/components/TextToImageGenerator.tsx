@@ -2,10 +2,13 @@
 
 import React, { useState, useRef } from 'react';
 import { Toaster, toast } from 'react-hot-toast';
-import { FaImage, FaTrash, FaBroom, FaDownload } from 'react-icons/fa';
+import { FaImage, FaTrash, FaBroom, FaDownload, FaCog, FaChevronDown, FaChevronUp } from 'react-icons/fa';
 import { generateImageFromText } from '../lib/gemini';
+import { getOptimizedRostroParams } from '../lib/rostroPrompts';
+import { prepareImagesForGemini } from '../lib/imageUtils';
 import { Slider } from '../components/Slider';
 import ImageDisplay from './ImageDisplay';
+import AdvancedSettings from './AdvancedSettings';
 
 // Estilos de imagen predefinidos
 const ESTILOS_IMAGEN = [
@@ -28,6 +31,23 @@ export default function TextToImageGenerator() {
   const [isHighResolution, setIsHighResolution] = useState(true);
   const [realismLevel, setRealismLevel] = useState(0.8);
   const [selectedStyle, setSelectedStyle] = useState('none');
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  
+  // Estados para los ajustes avanzados
+  const [advancedSettings, setAdvancedSettings] = useState({
+    estiloFotografico: 'digital',
+    texturaPiel: 'media',
+    iluminacion: 'natural',
+    postProcesado: 'moderado',
+    nivelDetalle: 0.7,
+    saturacionColor: 0.5,
+    profundidadSombras: 0.5,
+    nitidezDetalles: 0.6,
+    imagenReferencia: null as string | null,
+    // Nuevos campos para rostro persistente
+    rostroPersistente: false,
+    imagenesRostro: [] as string[]
+  });
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -43,6 +63,10 @@ export default function TextToImageGenerator() {
     setRealismLevel(value);
   };
 
+  const handleAdvancedSettingsChange = (newSettings: any) => {
+    setAdvancedSettings({...advancedSettings, ...newSettings});
+  };
+
   const handleGenerateImage = async () => {
     if (!prompt.trim()) {
       toast.error('Por favor, escribe una descripción para generar la imagen');
@@ -53,21 +77,99 @@ export default function TextToImageGenerator() {
       setGenerating(true);
       toast.loading('Generando imagen, por favor espera...', { id: 'generating' });
 
-      // Configurar las opciones con los nuevos parámetros
-      const options = {
+      // Preparar las opciones base
+      const optionsBase = {
         temperature: creativity,
         highResolution: isHighResolution,
         realism: realismLevel,
         style: selectedStyle !== 'none' ? selectedStyle : undefined,
-        seed: Math.floor(Math.random() * 100000) // Generar una semilla aleatoria en cada llamada
+        seed: Math.floor(Math.random() * 100000), // Generar una semilla aleatoria en cada llamada
+        topK: 32, // Valor por defecto para topK
+        topP: 0.8, // Valor por defecto para topP
       };
+
+      // Opciones avanzadas (si están habilitadas)
+      let advancedOpts = {};
+      if (showAdvancedSettings) {
+        const { imagenesRostro, imagenReferencia, ...otherSettings } = advancedSettings;
+        
+        advancedOpts = {
+          ...otherSettings,
+          rostroPersistente: advancedSettings.rostroPersistente,
+        };
+        
+        // Convertir imagen de referencia si existe
+        if (imagenReferencia) {
+          try {
+            toast('Preparando imagen de referencia...', { duration: 1000 });
+            const compatibleRefImage = await prepareImagesForGemini([imagenReferencia]);
+            if (compatibleRefImage.length > 0) {
+              advancedOpts = { ...advancedOpts, imagenReferencia: compatibleRefImage[0] };
+            }
+          } catch (error) {
+            console.error('Error al convertir imagen de referencia:', error);
+            toast.error('Problema con el formato de la imagen de referencia');
+          }
+        }
+        
+        // Convertir imágenes de rostro si existen
+        if (advancedSettings.rostroPersistente && imagenesRostro.length > 0) {
+          try {
+            toast('Preparando imágenes de rostro...', { duration: 2000 });
+            const compatibleFaceImages = await prepareImagesForGemini(imagenesRostro);
+            if (compatibleFaceImages.length > 0) {
+              advancedOpts = { 
+                ...advancedOpts, 
+                imagenesRostro: compatibleFaceImages,
+                rostroPersistente: true
+              };
+              
+              // Mostrar cuántas imágenes se procesaron correctamente
+              console.log(`Procesadas ${compatibleFaceImages.length} imágenes de rostro en formato compatible`);
+            } else {
+              toast.error('No se pudieron convertir las imágenes de rostro a un formato compatible');
+            }
+          } catch (error) {
+            console.error('Error al convertir imágenes de rostro:', error);
+            toast.error('Problema con el formato de las imágenes de rostro');
+          }
+        }
+      }
+
+      // Combinar opciones base con avanzadas
+      const options: any = {
+        ...optionsBase,
+        ...(showAdvancedSettings ? advancedOpts : {})
+      };
+
+      // Optimizar parámetros para rostro persistente cuando hay imágenes disponibles
+      if (options.rostroPersistente && options.imagenesRostro && options.imagenesRostro.length > 0) {
+        const numImages = options.imagenesRostro.length;
+        
+        // Utilizar la función optimizada para ajustar parámetros según número de imágenes
+        const optimizedParams = getOptimizedRostroParams(numImages, creativity, 32);
+        
+        // Aplicar parámetros optimizados
+        options.temperature = optimizedParams.temperature;
+        options.topK = optimizedParams.topK;
+        options.topP = optimizedParams.topP;
+        
+        if (numImages >= 4) {
+          toast.success(`Optimizando para ${numImages} imágenes de rostro (T: ${options.temperature.toFixed(2)}, K: ${options.topK})`);
+        } else {
+          toast(`Rostro persistente activo con ${numImages} imágenes. Para resultados óptimos, sube 4-6 imágenes.`, {
+            icon: '🔍',
+            duration: 3000
+          });
+        }
+      }
 
       const generatedImageData = await generateImageFromText(prompt, options);
       setGeneratedImages(prev => [generatedImageData, ...prev]);
       toast.success('¡Imagen generada con éxito!', { id: 'generating' });
     } catch (error) {
       console.error('Error al generar la imagen:', error);
-      toast.error('Error al generar la imagen. Por favor, intenta de nuevo.', { id: 'generating' });
+      toast.error(`Error al generar la imagen: ${error instanceof Error ? error.message : 'Intenta con otro formato de imagen'}`, { id: 'generating' });
     } finally {
       setGenerating(false);
     }
@@ -188,6 +290,32 @@ export default function TextToImageGenerator() {
             </div>
           </div>
         </div>
+        
+        {/* Botón de ajustes avanzados */}
+        <div className="mb-6">
+          <button
+            onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+            className="flex items-center justify-center gap-2 w-full px-4 py-2 text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-800 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          >
+            <FaCog className="text-gray-600 dark:text-gray-300" />
+            Ajustes Avanzados
+            {showAdvancedSettings ? <FaChevronUp /> : <FaChevronDown />}
+          </button>
+        </div>
+        
+        {/* Panel de ajustes avanzados */}
+        {showAdvancedSettings && (
+          <div className="mb-6 bg-gray-50 dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+            <h3 className="text-lg font-medium text-gray-800 dark:text-white mb-4">
+              Ajustes Avanzados
+            </h3>
+            
+            <AdvancedSettings 
+              values={advancedSettings}
+              onChange={handleAdvancedSettingsChange}
+            />
+          </div>
+        )}
         
         <div className="flex flex-wrap gap-3">
           <button
