@@ -206,7 +206,11 @@ export default function RealTimeChat() {
       let errorIcon = '❌';
       
       // Detectar tipos específicos de errores
-      const errorStr = error.toString();
+      const errorStr = error instanceof Error 
+        ? error.toString() 
+        : typeof error === 'string' 
+          ? error 
+          : 'Error desconocido';
       
       if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
         errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
@@ -334,7 +338,11 @@ export default function RealTimeChat() {
       let errorIcon = '❌';
       
       // Detectar tipos específicos de errores
-      const errorStr = error.toString();
+      const errorStr = error instanceof Error 
+        ? error.toString() 
+        : typeof error === 'string' 
+          ? error 
+          : 'Error desconocido';
       
       if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
         errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
@@ -584,7 +592,11 @@ export default function RealTimeChat() {
       let errorIcon = '❌';
       
       // Detectar tipos específicos de errores
-      const errorStr = error.toString();
+      const errorStr = error instanceof Error 
+        ? error.toString() 
+        : typeof error === 'string' 
+          ? error 
+          : 'Error desconocido';
       
       if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
         errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
@@ -710,7 +722,11 @@ export default function RealTimeChat() {
       let errorIcon = '❌';
       
       // Detectar tipos específicos de errores
-      const errorStr = error.toString();
+      const errorStr = error instanceof Error 
+        ? error.toString() 
+        : typeof error === 'string' 
+          ? error 
+          : 'Error desconocido';
       
       if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
         errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
