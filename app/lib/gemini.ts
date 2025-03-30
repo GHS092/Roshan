@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI, GenerateContentResult, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
+import { getOptimizedRostroPrompt } from './rostroPrompts';
 
 // Usar variables de entorno para la API key
 const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || 'AIzaSyBcYsacd3Ml2wlduHZRzkFzHLtgOcylOhQ';
@@ -156,32 +157,48 @@ export async function generateImageFromPrompt(
     // Comprobar si hay máscaras definidas para ajustar los parámetros
     const hasMasks = masks && Object.keys(masks).length > 0;
     
-    // Verificar si el prompt contiene instrucciones de transferencia entre imágenes
-    const containsTransferInstructions = 
-      promptLowerCase.includes('coloca') || 
-      promptLowerCase.includes('poner') || 
-      promptLowerCase.includes('pon') || 
-      promptLowerCase.includes('añade') || 
-      promptLowerCase.includes('añadir') || 
-      promptLowerCase.includes('agrega') || 
-      (promptLowerCase.includes('logo') && 
-       (promptLowerCase.includes('imagen 1') || promptLowerCase.includes('imagen 2')));
-    
     // Configuración más precisa para edición entre imágenes
     let generationConfig = {
       responseModalities: ['Text', 'Image'],
-      temperature: hasMasks ? 0.05 : 0.2,
-      topP: hasMasks ? 0.65 : 0.8,
-      topK: hasMasks ? 15 : 35,
+      temperature: hasMasks ? 0.02 : 0.1,  // Reducida para mayor consistencia
+      topP: hasMasks ? 0.6 : 0.7,  // Valores más restrictivos
+      topK: hasMasks ? 10 : 20,    // Reducido para mayor coherencia
       maxOutputTokens: 8192,
       seed: globalGenerationSeed
     };
     
+    // Verificar si el prompt contiene instrucciones de transferencia entre imágenes
+    const promptLower = prompt.toLowerCase();
+    const containsTransferInstructions = 
+      promptLower.includes('coloca') || 
+      promptLower.includes('poner') || 
+      promptLower.includes('pon') || 
+      promptLower.includes('añade') || 
+      promptLower.includes('añadir') || 
+      promptLower.includes('agrega') || 
+      (promptLower.includes('logo') && 
+       (promptLower.includes('imagen 1') || promptLower.includes('imagen 2')));
+    
     // Si contiene instrucciones de transferencia, ajustar parámetros para mayor precisión
     if (containsTransferInstructions && Array.isArray(imageData) && imageData.length > 1) {
-      generationConfig.temperature = 0.02; // Valor más bajo para mayor precisión
+      generationConfig.temperature = 0.01; // Valor más bajo para mayor precisión
       generationConfig.topP = 0.55;
       generationConfig.topK = 10;
+    }
+    
+    // Añadir instrucciones de consistencia cuando se está modificando una imagen existente
+    const previousImage = Array.isArray(imageData) ? imageData[0] : imageData;
+    if (previousImage) {
+      const consistencyInstructions = `
+      IMPORTANTE: Mantén absoluta consistencia con la imagen anterior en TODOS los aspectos.
+      - Preserva con exactitud los elementos principales (personas, objetos principales)
+      - Mantén consistencia en elementos secundarios (fondos, texturas, vegetación, iluminación)
+      - Conserva el estilo visual, tonalidad y atmósfera general
+      - Aplica ÚNICAMENTE los cambios solicitados sin alterar otros elementos
+      - No añadas ni elimines elementos que no se mencionan explícitamente
+      `;
+      
+      prompt = consistencyInstructions + "\n\n" + prompt;
     }
     
     // Configuración de seguridad
@@ -262,7 +279,7 @@ IMPORTANTE - REQUISITOS DE CALIDAD Y PRECISIÓN:
         let refImageText = `Esta es la imagen de referencia #${i} (IMAGEN ${i+1}). `;
         
         // Si es la segunda imagen y hay una referencia a un "logo" en el prompt
-        if (i === 1 && promptLowerCase.includes('logo')) {
+        if (i === 1 && prompt.toLowerCase().includes('logo')) {
           refImageText += `ATENCIÓN: Esta imagen contiene un LOGO que necesitas transferir a la IMAGEN 1. Identifica claramente el logo en esta imagen y colócalo exactamente según las instrucciones que daré más adelante. Es ESENCIAL que utilices el logo de esta imagen exactamente como aparece, sin modificar su diseño ni colores.`;
         } else {
           refImageText += `Puedes usarla como inspiración para la modificación.`;
@@ -763,7 +780,7 @@ function getMaskImageData(maskData: string, width: number, height: number): Prom
         // Mejorar la visibilidad de las máscaras rojas
         const data = imageData.data;
         
-        // Primero, realizar un análisis de las áreas rojas para mejorar la consistencia
+        // Primera pasada: identificar regiones rojas y sus límites
         let redRegions: RedRegion[] = [];
         let currentRegion: RedRegion | null = null;
         
@@ -1170,9 +1187,9 @@ export async function generateHighQualityImage(
     // Verificar si el prompt contiene referencias a águilas o aves
     // y solo proceder si el usuario lo ha solicitado explícitamente
     const eagleRelatedTerms = ['aguila', 'águila', 'eagle', 'hawk', 'ave', 'bird', 'pájaro', 'pajaro', 'loro', 'parrot'];
-    const promptLowerCase = prompt.toLowerCase();
+    const promptLower = prompt.toLowerCase();
     
-    const containsEagleTerms = eagleRelatedTerms.some(term => promptLowerCase.includes(term));
+    const containsEagleTerms = eagleRelatedTerms.some(term => promptLower.includes(term));
     
     // Si el prompt NO contiene referencias a águilas, asegurarse de que no se generen
     if (!containsEagleTerms) {
@@ -1190,7 +1207,7 @@ export async function generateHighQualityImage(
     
     // Crear la configuración optimizada para alta calidad
     const generationConfig = {
-      responseModalities: ['Text', 'Image'],
+      responseModalities: ['TEXT', 'IMAGE'],
       temperature: hasMasks ? 0.05 : 0.2,     // Temperatura aún más baja para consistencia
       topP: hasMasks ? 0.65 : 0.8,            // Reducir topP para máscaras
       topK: hasMasks ? 16 : 32,               // Reducir topK para máscaras
@@ -1334,7 +1351,7 @@ This image is a MASK that indicates EXACTLY where to apply changes.
     
     // Generar contenido
     const result = await model.generateContent({
-      contents: contents,
+      contents,
       generationConfig,
       safetySettings
     });
@@ -1388,16 +1405,16 @@ export async function generateImageVariations(
     console.log(`Generando ${variationCount} variaciones de imagen para: "${prompt}"`);
     
     // Verificar si el prompt contiene instrucciones de transferencia entre imágenes
-    const promptLowerCase = prompt.toLowerCase();
+    const promptLower = prompt.toLowerCase();
     const containsTransferInstructions = 
-      promptLowerCase.includes('coloca') || 
-      promptLowerCase.includes('poner') || 
-      promptLowerCase.includes('pon') || 
-      promptLowerCase.includes('añade') || 
-      promptLowerCase.includes('añadir') || 
-      promptLowerCase.includes('agrega') || 
-      (promptLowerCase.includes('logo') && 
-       (promptLowerCase.includes('imagen 1') || promptLowerCase.includes('imagen 2')));
+      promptLower.includes('coloca') || 
+      promptLower.includes('poner') || 
+      promptLower.includes('pon') || 
+      promptLower.includes('añade') || 
+      promptLower.includes('añadir') || 
+      promptLower.includes('agrega') || 
+      (promptLower.includes('logo') && 
+       (promptLower.includes('imagen 1') || promptLower.includes('imagen 2')));
     
     // Ajuste de temperaturas - Todas muy bajas para mantener precisión y evitar elementos adicionales
     let fidelityTemp = 0.01;  // Temperatura extremadamente baja para alta fidelidad
@@ -1608,17 +1625,14 @@ function preparePromptWithPhysicalRules(originalPrompt: string, mode: string = '
     'edificio', 'casa', 'objeto', 'elemento', 'logo', 'texto', 'letrero', 'cartel'
   ];
   
-  // Verificar si el prompt contiene términos de posicionamiento explícito
-  const containsPositioningTerms = positioningTerms.some(term => promptLower.includes(term));
-  
   // Verificar si el prompt indica adición de algún elemento
-  const additionTermFound = additionTerms.some(term => promptLower.includes(term));
+  const requiresIntegration = additionTerms.some(term => promptLower.includes(term));
   
   // Identificar qué sujeto o elemento está siendo añadido
   let subjectFound = false;
   let subjectType = '';
   
-  if (additionTermFound) {
+  if (requiresIntegration) {
     for (const subject of commonSubjects) {
       if (promptLower.includes(subject)) {
         subjectFound = true;
@@ -1630,7 +1644,7 @@ function preparePromptWithPhysicalRules(originalPrompt: string, mode: string = '
   
   // Si no encontramos un sujeto específico pero hay términos de adición,
   // asumimos que se está añadiendo un elemento genérico
-  if (additionTermFound && !subjectFound) {
+  if (requiresIntegration && !subjectFound) {
     subjectType = 'elemento';
   }
   
@@ -1638,7 +1652,7 @@ function preparePromptWithPhysicalRules(originalPrompt: string, mode: string = '
   let enhancedPrompt = originalPrompt;
   
   // Si se está añadiendo algo y no hay instrucciones de posicionamiento explícitas
-  if (additionTermFound && !containsPositioningTerms) {
+  if (requiresIntegration && !positioningTerms.some(term => promptLower.includes(term))) {
     // Detección de contexto para animales (cuadrúpedos vs. otros tipos)
     if (['perro', 'gato', 'caballo', 'vaca', 'oveja', 'cerdo', 'conejo', 'tigre', 'león', 'zorro', 'lobo', 'oso'].includes(subjectType)) {
       // Instrucciones para animales cuadrúpedos
@@ -1901,15 +1915,15 @@ async function generateVariation(
         const physicsInstructions = `
 INSTRUCCIONES CRÍTICAS DE FÍSICA:
 1. POSICIONAMIENTO FÍSICO OBLIGATORIO: Todos los elementos DEBEN estar firmemente apoyados sobre superficies físicas sólidas
-2. GRAVEDAD OBLIGATORIA: Nada puede flotar en el aire - todo debe obedecer la gravedad
+2. GRAVEDAD OBLIGATORIA: Nada puede flotar en el aire - TODO debe obedecer la GRAVEDAD
 3. SOMBRAS OBLIGATORIAS: Todo elemento debe proyectar sombras realistas en la superficie donde se apoya
 4. PESO VISUAL: Los elementos deben mostrar señales visuales de peso y masa
 
 Si el elemento es un animal:
-- TODAS sus patas deben estar FIRMEMENTE apoyadas en una superficie sólida
+- TODAS sus patas deben estar firmemente apoyadas en la superficie
 - Su postura debe ser ANATÓMICAMENTE CORRECTA
 - El peso debe estar DISTRIBUIDO CORRECTAMENTE en sus patas`;
-
+        
         contents.push({
           role: 'user',
           parts: [{ text: physicsInstructions }]
@@ -1926,7 +1940,7 @@ Si el elemento es un animal:
       contents.push({
         role: 'user',
         parts: [{ 
-          text: "RECUERDA: SOLO añade EXACTAMENTE lo que pide el prompt. NO añadas elementos adicionales no solicitados."
+          text: "RECUERDA: SOLO añade EXACTAMENTE lo que pide el prompt. NO añadas elementos adicionales."
         }]
       });
       
@@ -2069,39 +2083,69 @@ async function fallbackGenerateImage(
     // Verificar si el prompt indica adición de algún elemento
     const requiresIntegration = additionTerms.some(term => promptLower.includes(term));
     
-    // Modificar el prompt para enfatizar las reglas físicas y NO AÑADIR ELEMENTOS EXTRAS
-    let enhancedPrompt = `${prompt}
-
-INSTRUCCIONES OBLIGATORIAS:
-* AÑADE SOLAMENTE lo que solicita el prompt, NADA MÁS
-* NO añadas elementos adicionales no solicitados (pájaros, animales, personas, etc.)
-* Todo elemento añadido DEBE estar FIRMEMENTE APOYADO sobre una superficie sólida
-* Nada puede flotar en el aire - TODO debe obedecer la GRAVEDAD
-* Los elementos añadidos DEBEN proyectar SOMBRAS realistas sobre las superficies
-* Debe haber señales visibles de CONTACTO FÍSICO entre el elemento y la superficie`;
-
+    // Ajuste de parámetros para prompts que requieren integración física
+    let adjustedTemperature = 0.05;
+    let adjustedTopP = 0.6;
+    let adjustedTopK = 10;
+    
     if (requiresIntegration) {
-      enhancedPrompt += `
-* Si añades un animal:
-  - TODAS sus patas deben estar firmemente apoyadas en la superficie
-  - Su postura debe ser anatómicamente correcta y natural
-  - El peso debe estar distribuido correctamente según la especie`;
+      // Reducir temperatura para mayor coherencia en integración física
+      if (variationMode === "fidelity" || variationMode === "fidelity_alt") {
+        // Para fidelidad alta, priorizar exactitud con temperatura muy baja
+        adjustedTemperature = 0.01; 
+        adjustedTopP = 0.5;
+        adjustedTopK = 5;
+      } else if (variationMode === "balanced") {
+        // Para balance, reducir ligeramente los parámetros pero mantener conservador
+        adjustedTemperature = 0.03;
+        adjustedTopP = 0.55;
+        adjustedTopK = 8;
+      }
+      
+      console.log(`Ajustando parámetros para integración física: temp=${adjustedTemperature}, topP=${adjustedTopP}, topK=${adjustedTopK}`);
     }
     
-    enhancedPrompt += `
-
-IMPORTANTE: NO AÑADAS ELEMENTOS QUE NO SE SOLICITAN EN EL PROMPT ORIGINAL.`;
+    // Verificar si el prompt contiene instrucciones de transferencia entre imágenes
+    const containsTransferInstructions = 
+      promptLower.includes('coloca') || 
+      promptLower.includes('poner') || 
+      promptLower.includes('pon') || 
+      promptLower.includes('añade') || 
+      promptLower.includes('añadir') || 
+      promptLower.includes('agrega') || 
+      (promptLower.includes('logo') && 
+       (promptLower.includes('imagen 1') || promptLower.includes('imagen 2')));
     
-    // Intentar con el modelo estable primero, que puede ser más consistente
-    const model = getSessionAwareModel('gemini-2.0-flash');
+    // Ajustes adicionales para transferencia entre imágenes (mantener muy conservador)
+    if (containsTransferInstructions && Array.isArray(imageData) && imageData.length > 1) {
+      if (variationMode === "fidelity" || variationMode === "fidelity_alt") {
+        adjustedTemperature = 0.01;
+        adjustedTopP = 0.5;
+        adjustedTopK = 5;
+      } else if (variationMode === "balanced") {
+        adjustedTemperature = 0.03;
+        adjustedTopP = 0.55;
+        adjustedTopK = 8;
+      }
+    }
     
-    // Configuración optimizada para respetar reglas físicas
+    // Mejorar el prompt con reglas físicas e integración visual detalladas
+    const enhancedPrompt = preparePromptWithPhysicalRules(prompt, variationMode === "fidelity_alt" ? "fidelity" : variationMode);
+    
+    // Obtener el modelo específico para generación de imágenes
+    const model = getSessionAwareModel('gemini-2.0-flash-exp');
+    
+    // Comprobar si hay máscaras definidas
+    const hasMasks = masks && Object.keys(masks).length > 0;
+    
+    // Crear la configuración de generación
     const generationConfig = {
-      responseModalities: ['IMAGE'],
-      temperature: 0.05,  // Temperatura muy baja para mayor precisión
-      topP: 0.5,          // topP bajo para más consistencia
-      topK: 5,            // topK bajo para resultados más predecibles
+      responseModalities: ['TEXT', 'IMAGE'],
+      temperature: adjustedTemperature,
+      topP: adjustedTopP,
+      topK: adjustedTopK,
       maxOutputTokens: 8192,
+      // Para fidelity_alt usamos globalGenerationSeed+3 para tener más variedad
       seed: globalGenerationSeed + (variationMode === "balanced" ? 1 : variationMode === "fidelity_alt" ? 3 : 0)
     };
     
@@ -2125,58 +2169,176 @@ IMPORTANTE: NO AÑADAS ELEMENTOS QUE NO SE SOLICITAN EN EL PROMPT ORIGINAL.`;
       },
     ];
     
-    // Preparar contenido simplificado pero con instrucciones claras sobre física
-    const singleImage = Array.isArray(imageData) ? imageData[0] : imageData;
+    // Preparar los contenidos para enviar al modelo
+    let contents = [];
     
-    // Contenido base con la imagen y el prompt mejorado
-    const contents = [
-      {
+    if (Array.isArray(imageData) && imageData.length > 1) {
+      // Múltiples imágenes - procesar imágenes de referencia
+      
+      // Instrucciones para la imagen principal con énfasis en posicionamiento físico
+      let mainImageText = requiresIntegration 
+        ? "Imagen principal. SIGUE EXACTAMENTE lo que pide el prompt y NO añadas elementos adicionales no solicitados. Todo elemento añadido DEBE respetar las leyes físicas."
+        : "Imagen principal a editar según instrucciones. NO añadir elementos no solicitados.";
+      
+      contents.push({
         role: 'user',
         parts: [
-          { text: "INSTRUCCIÓN CRÍTICA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales no solicitados." },
+          { text: mainImageText },
           {
             inlineData: {
-              data: singleImage,
+              data: imageData[0],
               mimeType: 'image/jpeg',
             }
           }
         ]
+      });
+      
+      // Si hay una máscara para la imagen principal
+      if (masks && masks[0]) {
+        contents.push({
+          role: 'user',
+          parts: [
+            {
+              text: `Máscara que indica áreas a modificar. Modificar SOLO dentro de estas áreas.`
+            },
+            {
+              inlineData: {
+                data: masks[0].split(',')[1],
+                mimeType: 'image/png',
+              }
+            }
+          ]
+        });
       }
-    ];
-    
-    // Si hay máscara, incluirla con instrucciones claras
-    if (masks && masks[0]) {
+      
+      // Imágenes de referencia
+      for (let i = 1; i < imageData.length; i++) {
+        let refImageText = `Imagen de referencia ${i+1}.`;
+        
+        contents.push({
+          role: 'user',
+          parts: [
+            { text: refImageText },
+            {
+              inlineData: {
+                data: imageData[i],
+                mimeType: 'image/jpeg',
+              }
+            }
+          ]
+        });
+        
+        if (masks && masks[i]) {
+          contents.push({
+            role: 'user',
+            parts: [
+              {
+                text: `Máscara de referencia ${i+1}.`
+              },
+              {
+                inlineData: {
+                  data: masks[i].split(',')[1],
+                  mimeType: 'image/png',
+                }
+              }
+            ]
+          });
+        }
+      }
+      
+      // Instrucciones estrictas para NO añadir elementos no solicitados
       contents.push({
         role: 'user',
-        parts: [
-          {
-            text: `Máscara para áreas a modificar. Aplica las modificaciones SOLO dentro de estas áreas.`
-          },
-          {
-            inlineData: {
-              data: masks[0].split(',')[1],
-              mimeType: 'image/png',
+        parts: [{ 
+          text: "INSTRUCCIÓN CRÍTICA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales no solicitados (pájaros, animales, personas, etc.) bajo ninguna circunstancia."
+        }]
+      });
+      
+      // Si requiere integración, añadir instrucciones de posicionamiento prioritarias
+      if (requiresIntegration) {
+        const physicsInstructions = `
+INSTRUCCIONES CRÍTICAS DE FÍSICA:
+1. POSICIONAMIENTO FÍSICO OBLIGATORIO: Todos los elementos DEBEN estar firmemente apoyados sobre superficies físicas sólidas
+2. GRAVEDAD OBLIGATORIA: Nada puede flotar en el aire - TODO debe obedecer la GRAVEDAD
+3. SOMBRAS OBLIGATORIAS: Todo elemento debe proyectar sombras realistas en la superficie donde se apoya
+4. PESO VISUAL: Los elementos deben mostrar señales visuales de peso y masa
+
+Si el elemento es un animal:
+- TODAS sus patas deben estar firmemente apoyadas en la superficie
+- Su postura debe ser ANATÓMICAMENTE CORRECTA
+- El peso debe estar DISTRIBUIDO CORRECTAMENTE en sus patas`;
+        
+        contents.push({
+          role: 'user',
+          parts: [{ text: physicsInstructions }]
+        });
+      }
+      
+      // Instrucciones finales con el prompt mejorado
+      contents.push({
+        role: 'user',
+        parts: [{ text: enhancedPrompt }]
+      });
+      
+      // Reforzar una última vez la restricción de no añadir elementos adicionales
+      contents.push({
+        role: 'user',
+        parts: [{ 
+          text: "RECUERDA: SOLO añade EXACTAMENTE lo que pide el prompt. NO añadas elementos adicionales."
+        }]
+      });
+      
+    } else {
+      // Solo una imagen - enfoque para manipulación de una única imagen
+      const singleImage = Array.isArray(imageData) ? imageData[0] : imageData;
+      
+      // Instrucción con el prompt mejorado
+      contents = [
+        {
+          role: 'user',
+          parts: [
+            { text: "INSTRUCCIÓN CRÍTICA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales no solicitados." },
+            {
+              inlineData: {
+                data: singleImage,
+                mimeType: 'image/jpeg',
+              }
             }
-          }
-        ]
+          ]
+        }
+      ];
+      
+      if (masks && masks[0]) {
+        contents.push({
+          role: 'user',
+          parts: [
+            {
+              text: `Máscara que indica áreas a modificar. Modificar SOLO dentro de estas áreas.`
+            },
+            {
+              inlineData: {
+                data: masks[0].split(',')[1],
+                mimeType: 'image/png',
+              }
+            }
+          ]
+        });
+      }
+      
+      // Añadir el prompt mejorado
+      contents.push({
+        role: 'user',
+        parts: [{ text: enhancedPrompt }]
+      });
+      
+      // Reforzar las reglas una última vez
+      contents.push({
+        role: 'user',
+        parts: [{ 
+          text: "RECUERDA: SOLO añade EXACTAMENTE lo que solicita el prompt. NO agregues elementos adicionales."
+        }]
       });
     }
-    
-    // Añadir el prompt mejorado
-    contents.push({
-      role: 'user',
-      parts: [{ text: enhancedPrompt }]
-    });
-    
-    // Para casos que requieren integración, enfatizar reglas físicas una vez más
-    contents.push({
-      role: 'user',
-      parts: [
-        { 
-          text: `RECORDATORIO FINAL CRÍTICO: SOLO añade EXACTAMENTE lo que solicita el prompt. NO añadas elementos adicionales. Todo elemento añadido DEBE estar FIRMEMENTE apoyado sobre una superficie sólida.`
-        }
-      ]
-    });
     
     console.log("Enviando solicitud de respaldo a Gemini...");
     
@@ -2241,9 +2403,22 @@ export async function generateImageFromText(
     topP?: number;
     topK?: number;
     seed?: number;
-    highResolution?: boolean;  // Nuevo parámetro para solicitar alta resolución
+    highResolution?: boolean;  // Parámetro para solicitar alta resolución
     style?: string;            // Parámetro opcional para estilo específico
     realism?: number;          // Nivel de realismo (0-1)
+    // Ajustes avanzados
+    estiloFotografico?: string;
+    texturaPiel?: string;
+    iluminacion?: string;
+    postProcesado?: string;
+    nivelDetalle?: number;
+    saturacionColor?: number;
+    profundidadSombras?: number;
+    nitidezDetalles?: number;
+    imagenReferencia?: string | null;
+    // Nuevos parámetros para rostro persistente
+    rostroPersistente?: boolean;
+    imagenesRostro?: string[];
   }
 ): Promise<string> {
   try {
@@ -2257,16 +2432,33 @@ export async function generateImageFromText(
     const realism = options?.realism ?? 0.8; // Por defecto alto realismo
     const style = options?.style || '';
     
+    // Opciones avanzadas
+    const advancedOptionsEnabled = !!(options?.estiloFotografico || options?.texturaPiel || options?.iluminacion);
+    const rostroPersistenteEnabled = options?.rostroPersistente && options?.imagenesRostro && options.imagenesRostro.length > 0;
+    const numReferenceImages = options?.imagenesRostro?.length || 0;
+    
     console.log(`Generando imagen desde texto con prompt: "${prompt}"`);
     console.log(`Parámetros: temperatura=${temperature}, topP=${topP}, topK=${topK}, semilla=${seed}, altaResolución=${highResolution}, realismo=${realism}`);
     
+    if (advancedOptionsEnabled) {
+      console.log(`Ajustes avanzados activados: 
+        Estilo: ${options?.estiloFotografico}
+        Textura: ${options?.texturaPiel}
+        Iluminación: ${options?.iluminacion}
+        Post-procesado: ${options?.postProcesado}
+      `);
+    }
+    
+    if (rostroPersistenteEnabled) {
+      console.log(`Rostro persistente activado con ${options?.imagenesRostro?.length} imágenes`);
+    }
+    
     // Obtener el modelo específico para generación de imágenes
-    // Usar el modelo experimental que soporta generación de imágenes
     const model = getSessionAwareModel('gemini-2.0-flash-exp');
     
     // Configuración optimizada para generación de imágenes de alta calidad
     const generationConfig = {
-      responseModalities: ['TEXT', 'IMAGE'], // Formato correcto para este modelo
+      responseModalities: ['TEXT', 'IMAGE'],
       temperature: temperature,
       topP: topP,
       topK: topK,
@@ -2294,8 +2486,7 @@ export async function generateImageFromText(
       },
     ];
     
-    // Mejoramos el prompt para solicitar específicamente mayor resolución y realismo
-    // Construir un prompt optimizado basado en las opciones del usuario
+    // Construir el prompt mejorado con los parámetros avanzados
     let enhancedPrompt = prompt;
     
     // Añadir modificadores para alta resolución si se solicita
@@ -2309,34 +2500,145 @@ export async function generateImageFromText(
     }
     
     // Construir el contenido para enviar al modelo con indicaciones mejoradas para calidad
-    const prompt_text = `Crea una imagen de calidad profesional de: ${enhancedPrompt}
+    let prompt_text = '';
+    
+    // Preparar el prompt según los parámetros activados
+    if (rostroPersistenteEnabled) {
+      // PROMPT ESPECIAL PARA MANTENER PERSISTENCIA FACIAL
+      prompt_text = `Crea una imagen profesional de: ${enhancedPrompt}
 
-INSTRUCCIONES CRUCIALES DE CALIDAD:
-- Resolución máxima posible (1920x1080 o superior)
-- Fotorrealismo extremo (${realism * 100}% de realismo)
-- Texturas detalladas y palpables
-- Iluminación volumétrica y sombreado avanzado
-- Reflejos y sombras físicamente precisos
-- Profundidad de campo cinematográfica
-- Nitidez extrema en todos los detalles
-- Colores vibrantes y saturación natural
-- Sin distorsiones ni artefactos
-- Sin texto ni marcas de agua
-- Renderizado 3D de alta fidelidad
-- Proporciones y perspectiva precisas
-- CRÍTICO: Generar la imagen con el más alto nivel de detalle posible`;
+INSTRUCCIONES CRÍTICAS PARA ROSTRO PERSISTENTE:
 
-    // Usar la API con la estructura correcta
-    const result = await model.generateContent({
-      contents: [
+OBJETIVO: Mantener con EXACTITUD las características y rasgos faciales que aparecen en las imágenes de referencia.
+
+CARACTERÍSTICAS A PRESERVAR:
+- Forma exacta del rostro, ojos, nariz, boca y orejas
+- Color de piel, ojos y cabello
+- Expresiones faciales características 
+- Proporciones y simetría facial
+- Rasgos distintivos como lunares, cicatrices o marcas faciales
+- Estructura ósea y forma de la mandíbula
+
+RESTRICCIONES IMPORTANTES:
+- NO alteres los rasgos faciales bajo ninguna circunstancia
+- NO "mejores" o "idealices" el rostro
+- NO cambies la edad o apariencia del rostro
+- NO modifiques el género o identidad de la persona
+- NO generes personas diferentes
+
+INSTRUCCIONES TÉCNICAS:
+- Analiza cuidadosamente TODAS las imágenes de referencia proporcionadas para comprender los detalles faciales
+- Construye un modelo mental tridimensional del rostro usando todas las imágenes de referencia
+- Reproduce con precisión fotográfica las características faciales en la imagen final
+- Aplica coherentemente las características faciales al contexto solicitado en el prompt
+- Preserva la identidad facial reconocible incluso con cambios de ángulo, iluminación o contexto
+
+${advancedOptionsEnabled ? getSettingsPromptText(options) : getQualityPromptText(realism)}`;
+    }
+    else if (advancedOptionsEnabled) {
+      // PROMPT AVANZADO CON AJUSTES DETALLADOS
+      prompt_text = `Crea una imagen profesional de: ${enhancedPrompt}
+
+INSTRUCCIONES CRÍTICAS PARA FOTORREALISMO AVANZADO:
+
+${getSettingsPromptText(options)}`;
+    } else {
+      // PROMPT ESTÁNDAR PARA COMPATIBILIDAD CON VERSIONES ANTERIORES
+      prompt_text = `Crea una imagen de calidad profesional de: ${enhancedPrompt}
+
+${getQualityPromptText(realism)}`;
+    }
+    
+    // Preparar el contenido para enviar al modelo
+    const request: any = {
+      generationConfig,
+      safetySettings
+    };
+    
+    if (rostroPersistenteEnabled && options?.imagenesRostro && options.imagenesRostro.length > 0) {
+      // Preparación de contenido multimodal con múltiples imágenes de rostro
+      const parts: any[] = [];
+      
+      // Añadir el texto de instrucción con el prompt mejorado
+      parts.push({ 
+        text: `Necesito que crees una imagen que mantenga EXACTAMENTE el mismo rostro que aparece en estas imágenes de referencia. 
+        
+La persona de las imágenes debería aparecer en la siguiente escena: "${prompt}"
+
+${prompt_text}
+
+IMPORTANTE: Estas imágenes muestran a la MISMA persona desde diferentes ángulos. 
+Tu tarea es mantener la IDENTIDAD FACIAL exacta, reconocible e intacta en la imagen generada.` 
+      });
+      
+      // Añadir cada imagen de rostro como parte del mensaje
+      for (const imagenRostro of options.imagenesRostro) {
+        const matches = imagenRostro.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          parts.push({
+            inlineData: {
+              mimeType: matches[1],
+              data: matches[2]
+            }
+          });
+        }
+      }
+      
+      request.contents = [
+        {
+          role: 'user',
+          parts: parts
+        }
+      ];
+    }
+    else if (options?.imagenReferencia) {
+      // Caso de imagen de referencia única (funcionalidad existente)
+      const matches = options.imagenReferencia.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches && matches.length === 3) {
+        const mimeType = matches[1];
+        const base64Data = matches[2];
+        
+        request.contents = [
+          {
+            role: 'user',
+            parts: [
+              { 
+                text: `Esta es una imagen de referencia para el estilo fotográfico que quiero. 
+Por favor, genera una nueva imagen de: "${prompt}" 
+usando un estilo fotográfico similar a esta imagen de referencia.
+
+${prompt_text}` 
+              },
+              {
+                inlineData: {
+                  mimeType: mimeType,
+                  data: base64Data
+                }
+              }
+            ]
+          }
+        ];
+      } else {
+        console.error("Formato de imagen de referencia no válido");
+        request.contents = [
+          {
+            role: 'user',
+            parts: [{ text: prompt_text }]
+          }
+        ];
+      }
+    } else {
+      // Caso sin imágenes de referencia (solo texto)
+      request.contents = [
         {
           role: 'user',
           parts: [{ text: prompt_text }]
         }
-      ],
-      generationConfig,
-      safetySettings
-    });
+      ];
+    }
+    
+    // Usar la API con la estructura correcta
+    const result = await model.generateContent(request);
     
     const response = await result.response;
     
@@ -2366,21 +2668,13 @@ INSTRUCCIONES CRUCIALES DE CALIDAD:
       // Si no encontramos una imagen, intentar con otra configuración
       console.log("No se encontró imagen en la respuesta. Intentando con configuración alternativa...");
       
-      // Pasar las opciones de alta resolución y realismo al método alternativo
-      return await generateImageFromTextAlternative(prompt, {
-        ...options,
-        highResolution,
-        realism
-      });
+      // Pasar las opciones al método alternativo
+      return await generateImageFromTextAlternative(prompt, options);
     }
     
     // Si no hay candidatos válidos, intentar con respaldo
     console.log("No hay candidatos válidos en la respuesta. Intentando con configuración alternativa...");
-    return await generateImageFromTextAlternative(prompt, {
-      ...options,
-      highResolution,
-      realism
-    });
+    return await generateImageFromTextAlternative(prompt, options);
   } catch (error) {
     console.error("Error al generar imagen desde texto:", error);
     
@@ -2395,6 +2689,51 @@ INSTRUCCIONES CRUCIALES DE CALIDAD:
   }
 }
 
+// Función para obtener el texto de instrucciones para los ajustes avanzados
+function getSettingsPromptText(options?: any): string {
+  return `
+ESTILO FOTOGRÁFICO: ${getEstiloFotograficoText(options?.estiloFotografico)}
+
+TEXTURAS Y DETALLES:
+- ${getTexturaPielText(options?.texturaPiel)}
+- Nivel de detalle: ${options?.nivelDetalle ? (options.nivelDetalle * 100).toFixed(0) + '%' : 'alto'}
+- Nitidez: ${options?.nitidezDetalles ? (options.nitidezDetalles * 100).toFixed(0) + '%' : 'media-alta'}
+
+ILUMINACIÓN: ${getIluminacionText(options?.iluminacion)}
+- Profundidad de sombras: ${options?.profundidadSombras ? (options.profundidadSombras * 100).toFixed(0) + '%' : 'natural'}
+- Saturación de color: ${options?.saturacionColor ? (options.saturacionColor * 100).toFixed(0) + '%' : 'natural'}
+
+POST-PROCESADO: ${getPostProcesadoText(options?.postProcesado)}
+
+TÉCNICAS FOTOGRÁFICAS:
+- Utiliza técnicas de fotografía profesional real
+- Aplica principios de composición fotográfica
+- Resolución máxima (1920x1080 o superior)
+- Evita efectos CGI o apariencia 3D artificial
+- No añadas textos, marcas de agua ni firmas
+- Detalles auténticos y naturales en todas las superficies
+- Perspectiva y proporción realistas y precisas
+
+CRÍTICO: NO utilices renderizado 3D/CGI. Genera una imagen que parezca una FOTOGRAFÍA REAL capturada con una cámara profesional.`;
+}
+
+// Función para obtener el texto de instrucciones de calidad estándar
+function getQualityPromptText(realism: number): string {
+  return `INSTRUCCIONES CRUCIALES DE CALIDAD:
+1. RESOLUCIÓN MÁXIMA - FHD 1920x1080 o superior
+2. Fotorrealismo extremo (${realism * 100}% de realismo)
+3. Texturas detalladas y palpables
+4. Iluminación volumétrica compleja con luces y sombras detalladas
+5. Reflejos y sombras físicamente precisos
+6. Profundidad de campo cinematográfica
+7. Colores vibrantes y saturación natural
+8. Sin distorsiones ni artefactos
+9. Sin texto ni marcas de agua
+10. Renderizado 3D de alta fidelidad
+11. Proporciones y perspectiva precisas
+12. CRÍTICO: Generar la imagen con el más alto nivel de detalle posible`;
+}
+
 // Función alternativa para generar imágenes desde texto
 async function generateImageFromTextAlternative(
   prompt: string,
@@ -2406,19 +2745,37 @@ async function generateImageFromTextAlternative(
     highResolution?: boolean;
     realism?: number;
     style?: string;
+    // Ajustes avanzados
+    estiloFotografico?: string;
+    texturaPiel?: string;
+    iluminacion?: string;
+    postProcesado?: string;
+    nivelDetalle?: number;
+    saturacionColor?: number;
+    profundidadSombras?: number;
+    nitidezDetalles?: number;
+    imagenReferencia?: string | null;
+    // Nuevo: rostro persistente
+    rostroPersistente?: boolean;
+    imagenesRostro?: string[];
   }
 ): Promise<string> {
   try {
     const temperature = options?.temperature ?? 0.7; // Mayor temperatura para más creatividad
     const topP = options?.topP ?? 0.95;
     const topK = options?.topK ?? 64;
-    // Usar la semilla proporcionada o generar una nueva, nunca usar globalGenerationSeed
     const seed = options?.seed ?? Math.floor(Math.random() * 100000);
     const highResolution = options?.highResolution ?? true;
     const realism = options?.realism ?? 0.7;
     const style = options?.style || '';
     
+    // Verificar si el rostro persistente está activado
+    const rostroPersistenteEnabled = options?.rostroPersistente && options?.imagenesRostro && options.imagenesRostro.length > 0;
+    
     console.log("Usando generación alternativa con optimización para mayor calidad");
+    if (rostroPersistenteEnabled) {
+      console.log(`Rostro persistente activado con ${options?.imagenesRostro?.length} imágenes (método alternativo)`);
+    }
     
     // Usar el modelo experimental que puede generar imágenes
     const model = getSessionAwareModel('gemini-2.0-flash-exp');
@@ -2464,30 +2821,147 @@ async function generateImageFromTextAlternative(
     }
     
     // Instrucción muy específica para generar una imagen de alta calidad
-    const prompt_text = `Genera una imagen fotorrealista de: ${enhancedPrompt}
+    let prompt_text = '';
+    const advancedOptionsEnabled = !!(options?.estiloFotografico || options?.texturaPiel || options?.iluminacion);
+    
+    // Determinar el prompt según los parámetros activados
+    if (rostroPersistenteEnabled) {
+      // PROMPT ESPECIAL PARA ROSTRO PERSISTENTE (MÉTODO ALTERNATIVO)
+      prompt_text = `Genera una imagen fotográfica de: ${enhancedPrompt}
+
+INSTRUCCIONES CRÍTICAS PARA PRESERVAR IDENTIDAD FACIAL:
+
+IMPORTANTE: DEBES mantener EXACTAMENTE el mismo rostro que se muestra en estas imágenes de referencia.
+
+MANTÉN ESTOS RASGOS FACIALES EXACTOS:
+1. Forma precisa de cara, ojos, nariz, boca y cejas
+2. Tono de piel y color de ojos exactos
+3. Textura de piel y características faciales distintivas
+4. Proporciones faciales, distancia entre ojos, nariz y boca
+5. Estructura ósea y forma de mandíbula/pómulos
+6. NO cambies, mejores ni idealices el rostro bajo ninguna circunstancia
+7. NO alteres la edad, género o identidad del rostro
+
+REQUISITOS TÉCNICOS:
+- Resolución fotográfica máxima (1920x1080)
+- Iluminación fotorrealista que preserve los rasgos faciales
+- El rostro debe ser inmediatamente reconocible como la misma persona de las imágenes proporcionadas
+- Mantén características distintivas únicas como lunares, cicatrices o marcas
+- La identidad del rostro es ABSOLUTAMENTE PRIORITARIA sobre cualquier otra consideración creativa
+
+NOTA CRUCIAL: Tu objetivo principal es asegurar que el rostro en la imagen generada sea IDÉNTICO a las imágenes de referencia. Este es el criterio más importante para esta generación.`;
+    }
+    else if (advancedOptionsEnabled) {
+      // Versión alternativa con ajustes avanzados
+      prompt_text = `Genera una imagen FOTOGRÁFICA REAL (no CGI) de: ${enhancedPrompt}
+
+PARÁMETROS CRÍTICOS PARA FOTOGRAFÍA REALISTA:
+
+${getSettingsPromptText(options)}`;
+    } else {
+      // Original prompt para compatibilidad
+      prompt_text = `Genera una imagen fotorrealista de: ${enhancedPrompt}
     
 CRÍTICO - REQUISITOS DE CALIDAD:
 1. RESOLUCIÓN MÁXIMA - FHD 1920x1080 o superior
 2. Fotorrealismo extremo (${realism * 100}% de realismo)
 3. Iluminación volumétrica compleja con luces y sombras detalladas
 4. Texturas realistas con micro-detalles visibles
-5. Sin distorsiones ni artefactos de compresión
+5. Sin distorsiones ni artefactos
 6. Profundidad de campo cinematográfica
 7. Colores ricos y contrastados pero naturales
 8. Renderizado de alta fidelidad de todos los elementos
 9. No incluir texto ni marcas de agua`;
+    }
+    
+    // Determinar contenido a enviar según las imágenes disponibles
+    const request: any = { 
+      generationConfig,
+      safetySettings
+    };
+    
+    if (rostroPersistenteEnabled && options?.imagenesRostro && options.imagenesRostro.length > 0) {
+      // Caso de rostro persistente con múltiples imágenes
+      const parts: any[] = [];
+      
+      // Añadir el texto de instrucción
+      parts.push({ 
+        text: `Necesito que generes una imagen con EXACTAMENTE el mismo rostro que aparece en estas imágenes de referencia.
+        
+La persona debería aparecer en: "${prompt}"
 
-    // Usar la API con la estructura correcta y el prompt mejorado
-    const result = await model.generateContent({
-      contents: [
+${prompt_text}
+
+IMPORTANTE: Todas estas imágenes muestran a la MISMA persona. Tu tarea es preservar su identidad facial exacta.` 
+      });
+      
+      // Añadir todas las imágenes de referencia como parte del mensaje
+      for (const imagenRostro of options.imagenesRostro) {
+        const matches = imagenRostro.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          parts.push({
+            inlineData: {
+              mimeType: matches[1],
+              data: matches[2]
+            }
+          });
+        }
+      }
+      
+      request.contents = [
+        {
+          role: 'user',
+          parts: parts
+        }
+      ];
+    }
+    else if (options?.imagenReferencia) {
+      // Caso de imagen de referencia estilística
+      const matches = options.imagenReferencia.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches && matches.length === 3) {
+        const mimeType = matches[1];
+        const base64Data = matches[2];
+        
+        request.contents = [
+          {
+            role: 'user',
+            parts: [
+              { 
+                text: `Esta es una imagen de referencia para el estilo fotográfico que quiero. 
+Por favor, genera una nueva imagen de: "${prompt}" 
+usando un estilo fotográfico similar a esta imagen de referencia.
+
+${prompt_text}` 
+              },
+              {
+                inlineData: {
+                  mimeType: mimeType,
+                  data: base64Data
+                }
+              }
+            ]
+          }
+        ];
+      } else {
+        request.contents = [
+          {
+            role: 'user',
+            parts: [{ text: prompt_text }]
+          }
+        ];
+      }
+    } else {
+      // Caso sin imágenes de referencia (solo texto)
+      request.contents = [
         {
           role: 'user',
           parts: [{ text: prompt_text }]
         }
-      ],
-      generationConfig,
-      safetySettings
-    });
+      ];
+    }
+    
+    // Usar la API con la estructura correcta y el prompt mejorado
+    const result = await model.generateContent(request);
     
     const response = await result.response;
     
@@ -2511,10 +2985,83 @@ CRÍTICO - REQUISITOS DE CALIDAD:
       }
     }
     
-    throw new Error("La generación alternativa no produjo una imagen");
+    // Si todo falla, intentar con el método de alta calidad como última opción
+    console.log("Método de respaldo falló, intentando con método de alta calidad");
+    return await generateHighQualityImage(prompt, prompt, options);
   } catch (error) {
     console.error("Error en la generación alternativa de imagen:", error);
-    throw error;
+    return await generateHighQualityImage(prompt, prompt, options);
+  }
+}
+
+// Funciones auxiliares para traducir los parámetros a texto descriptivo
+function getEstiloFotograficoText(estilo?: string): string {
+  switch (estilo) {
+    case 'digital':
+      return 'Fotografía digital moderna de alta calidad con detalles nítidos y colores precisos';
+    case 'analogica':
+      return 'Fotografía analógica con textura de grano suave, colores ligeramente desaturados y calidez natural';
+    case 'retrato':
+      return 'Retrato profesional de estudio con iluminación perfectamente controlada y fondo neutro';
+    case 'editorial':
+      return 'Fotografía de estilo editorial para revista, con composición elegante y acabado pulido';
+    case 'documentalista':
+      return 'Estilo documental/fotoperiodismo con aspecto auténtico y sin retoques evidentes';
+    case 'cine':
+      return 'Fotografía cinematográfica con proporción de aspecto de cine, tonos ricos y profundidad visual';
+    default:
+      return 'Fotografía profesional con iluminación y composición equilibradas';
+  }
+}
+
+function getTexturaPielText(textura?: string): string {
+  switch (textura) {
+    case 'alta':
+      return 'Textura de piel de alta definición con poros visibles, imperfecciones naturales y detalles microscópicos';
+    case 'media':
+      return 'Textura de piel con definición media, suave pero realista, con detalles sutiles';
+    case 'baja':
+      return 'Textura de piel suavizada como en fotografía editorial, pulida pero no artificial';
+    case 'natural':
+      return 'Textura de piel completamente natural sin retoques, mostrando todas las características reales';
+    default:
+      return 'Textura de piel realista con detalles naturales equilibrados';
+  }
+}
+
+function getIluminacionText(iluminacion?: string): string {
+  switch (iluminacion) {
+    case 'natural':
+      return 'Iluminación natural suave proveniente de una fuente de luz como ventana o luz solar difusa';
+    case 'estudio':
+      return 'Iluminación profesional de estudio con luces principales, de relleno y de contorno bien balanceadas';
+    case 'ambiente':
+      return 'Iluminación ambiental interior cálida con sombras suaves y ambiente acogedor';
+    case 'dramatica':
+      return 'Iluminación dramática con alto contraste, sombras profundas y destacado de contornos';
+    case 'cinematica':
+      return 'Iluminación cinematográfica con ratio de contraste controlado y fuentes de luz motivadas';
+    case 'exterior':
+      return 'Luz exterior natural con cielo como fuente principal de iluminación y sol como luz direccional';
+    default:
+      return 'Iluminación equilibrada con sombras naturales y luces suaves';
+  }
+}
+
+function getPostProcesadoText(postProcesado?: string): string {
+  switch (postProcesado) {
+    case 'ninguno':
+      return 'Sin post-procesado, imagen cruda con todas las características naturales intactas';
+    case 'minimo':
+      return 'Post-procesado mínimo: solo correcciones básicas de color, contraste y exposición';
+    case 'moderado':
+      return 'Post-procesado moderado: ajustes profesionales equilibrados sin llegar a modificar la apariencia natural';
+    case 'alto':
+      return 'Post-procesado intenso al estilo de revista con piel perfeccionada y colores mejorados';
+    case 'artistico':
+      return 'Post-procesado artístico con ajustes creativos de color, contraste y efectos';
+    default:
+      return 'Post-procesado moderado y profesional que mejora la imagen sin exagerar';
   }
 }
 
@@ -2522,24 +3069,24 @@ CRÍTICO - REQUISITOS DE CALIDAD:
 export async function realTimeChatWithImage(
   message: string,
   imageData?: string,
-  history?: Array<{role: string, parts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}>}>,
+  history?: Array<{role: string, parts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}>}>
 ): Promise<{
   text?: string,
   imageData?: string,
   history: Array<{role: string, parts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}>}>
 }> {
   try {
-    // Obtener el modelo adecuado para chat con imágenes
-    const model = getSessionAwareModel('gemini-2.0-flash-exp-image-generation');
+    // Obtener el modelo adecuado para chat con imágenes - Actualizado a Pro para mejor calidad
+    const model = getSessionAwareModel('gemini-2.0-flash-exp');
     
-    // Configuración para generación de respuestas que pueden incluir imágenes
+    // Configuración optimizada para generación de respuestas con mayor realismo
     const generationConfig = {
       responseModalities: ['TEXT', 'IMAGE'], // Especificar que queremos texto e imagen
-      temperature: 0.4,
-      topP: 0.8,
-      topK: 35,
+      temperature: 0.1,     // Reducido para mayor coherencia y realismo
+      topP: 0.7,            // Ajustado para resultados más predecibles
+      topK: 20,             // Limitado para mayor consistencia
       maxOutputTokens: 8192,
-      seed: Math.floor(Math.random() * 100000) // Semilla aleatoria para variedad
+      seed: Date.now() % 10000 // Semilla basada en timestamp para consistencia
     };
     
     // Configuración de seguridad
@@ -2562,15 +3109,60 @@ export async function realTimeChatWithImage(
       },
     ];
     
+    // Definición de estilos fotográficos para mejorar el realismo
+    const photoStyles = {
+      portrait: "Estilo de retrato profesional con iluminación Rembrandt, profundidad de campo media, textura de piel natural con poros visibles, detalles en ojos y cabello, y tonos de piel realistas.",
+      fashion: "Fotografía de moda de alta calidad con iluminación de estudio, detalles nítidos en la ropa y accesorios, texturas de tela realistas con pliegues naturales, y acabado ligeramente contrastado.",
+      candid: "Fotografía espontánea con iluminación natural, profundidad de campo variable, texturas auténticas, y expresiones naturales. Incluye imperfecciones sutiles para mayor autenticidad.",
+      beauty: "Fotografía de belleza profesional con iluminación suave y envolvente, detalles precisos en la piel con textura natural, definición en rasgos faciales, y tonos de piel precisos y naturales."
+    };
+    
+    // Seleccionar el estilo fotográfico más adecuado basado en el contenido del mensaje
+    let selectedStyle = photoStyles.portrait; // Estilo predeterminado
+    const messageLower = message.toLowerCase();
+    
+    if (messageLower.includes('moda') || messageLower.includes('ropa') || 
+        messageLower.includes('vestido') || messageLower.includes('fashion')) {
+      selectedStyle = photoStyles.fashion;
+    } else if (messageLower.includes('natural') || messageLower.includes('casual') || 
+               messageLower.includes('espontáneo') || messageLower.includes('candid')) {
+      selectedStyle = photoStyles.candid;
+    } else if (messageLower.includes('belleza') || messageLower.includes('beauty') || 
+               messageLower.includes('retrato') || messageLower.includes('closeup')) {
+      selectedStyle = photoStyles.beauty;
+    }
+    
+    // Instrucciones para mejorar el realismo
+    const realismInstructions = `
+INSTRUCCIONES CRÍTICAS PARA REALISMO FOTOGRÁFICO:
+1. Mantén texturas de piel naturales con poros visibles, imperfecciones sutiles y variaciones de tono.
+2. Evita completamente la apariencia "plastificada" o demasiado suavizada de la piel.
+3. Asegura que la ropa tenga pliegues, arrugas y caída natural según el material.
+4. Los accesorios deben tener proporciones y materiales realistas.
+5. La iluminación debe crear sombras naturales y reflejos apropiados.
+6. Mantén proporciones corporales anatómicamente correctas.
+7. Genera imágenes con estilo fotográfico de alta calidad, similar a fotografías tomadas con cámaras DSLR profesionales.
+8. Aplica ${selectedStyle}
+9. CRÍTICO: Evita cualquier efecto de suavizado artificial en la piel o en las texturas.
+10. Asegura que los ojos tengan detalles realistas, incluyendo reflejos naturales, variaciones de color en el iris y pestañas definidas.
+11. El cabello debe tener textura y mechones individuales visibles, evitando la apariencia de "casco".
+12. Los labios deben tener textura natural con líneas sutiles y variaciones de color.
+13. Mantén la coherencia en la iluminación en toda la imagen, con sombras y brillos que correspondan a una fuente de luz realista.
+14. Cualquier maquillaje debe verse natural y no como aplicado digitalmente.
+15. Aplica profundidad de campo apropiada para crear separación entre el sujeto y el fondo.
+`;
+    
     // Preparar el historial de conversación o iniciarlo si no existe
     let chatHistory = history || [];
     
     // Preparar el mensaje del usuario
     let userMessageParts: Array<{text?: string, inlineData?: {mimeType: string, data: string}}> = [];
     
-    // Si hay texto, añadirlo a las partes
+    // Si hay texto, añadirlo a las partes con las instrucciones de realismo
     if (message) {
-      userMessageParts.push({ text: message });
+      // Combinar el mensaje original con las instrucciones de realismo
+      const enhancedMessage = `${message}\n\n${realismInstructions}`;
+      userMessageParts.push({ text: enhancedMessage });
     }
     
     // Si hay imagen, añadirla a las partes
@@ -2672,7 +3264,19 @@ export async function realTimeChatWithImage(
       if (part.text) {
         responseObj.text = part.text;
       } else if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
-        responseObj.imageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        // Obtener la imagen generada
+        let generatedImageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        
+        // Aplicar post-procesamiento para mejorar el realismo
+        try {
+          generatedImageData = await enhanceRealism(generatedImageData);
+          console.log("Post-procesamiento de realismo aplicado con éxito");
+        } catch (error) {
+          console.error("Error en el post-procesamiento de la imagen:", error);
+          // Si falla el post-procesamiento, usar la imagen original
+        }
+        
+        responseObj.imageData = generatedImageData;
       }
     }
     
@@ -2682,5 +3286,148 @@ export async function realTimeChatWithImage(
   } catch (error) {
     console.error("Error en la conversación en tiempo real:", error);
     throw error;
+  }
+}
+
+// Función para mejorar el realismo mediante post-procesamiento
+async function enhanceRealism(imageData: string): Promise<string> {
+  return processImageWithCanvas(imageData, async (ctx, width, height) => {
+    // Obtener los datos de la imagen
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    
+    // 1. Mejorar la textura de la piel
+    // Detectar áreas de piel y aplicar sutil variación de textura
+    for (let i = 0; i < data.length; i += 4) {
+      // Detectar píxeles que podrían ser piel (basado en rango de color)
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      
+      // Detección simple de tonos de piel (esto puede mejorarse con algoritmos más sofisticados)
+      if (r > 60 && g > 40 && b > 20 && r > g && g > b && r - b > 15) {
+        // Es probable que sea piel, añadir sutil variación de textura
+        // Añadir ruido sutil para simular poros y textura natural
+        const noiseAmount = 3; // Ajustar según sea necesario
+        const noise = (Math.random() - 0.5) * noiseAmount;
+        
+        // Aplicar el ruido de manera sutil para no arruinar la imagen
+        data[i] = Math.max(0, Math.min(255, r + noise));
+        data[i + 1] = Math.max(0, Math.min(255, g + noise * 0.8));
+        data[i + 2] = Math.max(0, Math.min(255, b + noise * 0.6));
+      }
+    }
+    
+    // 2. Mejorar detalles generales
+    applyDetailEnhancement(data, width, height);
+    
+    // 3. Aplicar mezcla adaptativa para bordes más naturales
+    const artificialEdges = detectArtificialEdges(data, width, height);
+    applyAdaptiveBlending(data, width, height, artificialEdges);
+    
+    // Aplicar los cambios a la imagen
+    ctx.putImageData(imgData, 0, 0);
+  });
+}
+
+// Función auxiliar para detectar bordes artificiales
+function detectArtificialEdges(data: Uint8ClampedArray, width: number, height: number): Array<{x: number, y: number, radius: number}> {
+  const edges: Array<{x: number, y: number, radius: number}> = [];
+  const threshold = 30; // Umbral para detectar cambios bruscos
+  
+  // Recorrer la imagen buscando cambios bruscos de color
+  for (let y = 1; y < height - 1; y += 2) {
+    for (let x = 1; x < width - 1; x += 2) {
+      const idx = (y * width + x) * 4;
+      const idxUp = ((y - 1) * width + x) * 4;
+      const idxDown = ((y + 1) * width + x) * 4;
+      const idxLeft = (y * width + (x - 1)) * 4;
+      const idxRight = (y * width + (x + 1)) * 4;
+      
+      // Calcular diferencias de color con píxeles vecinos
+      const diffUp = Math.abs(data[idx] - data[idxUp]) + 
+                     Math.abs(data[idx + 1] - data[idxUp + 1]) + 
+                     Math.abs(data[idx + 2] - data[idxUp + 2]);
+      
+      const diffDown = Math.abs(data[idx] - data[idxDown]) + 
+                       Math.abs(data[idx + 1] - data[idxDown + 1]) + 
+                       Math.abs(data[idx + 2] - data[idxDown + 2]);
+      
+      const diffLeft = Math.abs(data[idx] - data[idxLeft]) + 
+                       Math.abs(data[idx + 1] - data[idxLeft + 1]) + 
+                       Math.abs(data[idx + 2] - data[idxLeft + 2]);
+      
+      const diffRight = Math.abs(data[idx] - data[idxRight]) + 
+                        Math.abs(data[idx + 1] - data[idxRight + 1]) + 
+                        Math.abs(data[idx + 2] - data[idxRight + 2]);
+      
+      // Si hay un cambio brusco en cualquier dirección, marcar como borde artificial
+      if (diffUp > threshold || diffDown > threshold || diffLeft > threshold || diffRight > threshold) {
+        edges.push({
+          x: x,
+          y: y,
+          radius: 2 // Radio de suavizado
+        });
+      }
+    }
+  }
+  
+  return edges;
+}
+
+// Formatos de imagen compatibles con la API de Gemini
+const COMPATIBLE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+// Función para verificar si un Data URL es de un formato de imagen compatible
+function isCompatibleImageFormat(dataUrl: string): boolean {
+  const matches = dataUrl.match(/^data:([A-Za-z-+\/]+);base64,/);
+  if (!matches || matches.length !== 2) return false;
+  
+  const mimeType = matches[1];
+  return COMPATIBLE_MIME_TYPES.includes(mimeType);
+}
+
+// Función para asegurar que la imagen esté en formato compatible
+async function ensureCompatibleFormat(imageDataUrl: string): Promise<string> {
+  // Si ya es compatible, devolverla sin cambios
+  if (isCompatibleImageFormat(imageDataUrl)) return imageDataUrl;
+  
+  // Convertir a formato compatible (JPEG)
+  try {
+    console.log("Convirtiendo imagen a formato compatible...");
+    
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          console.error("No se pudo crear contexto de renderizado");
+          return reject(new Error("Error al convertir imagen: no se pudo crear contexto de renderizado"));
+        }
+        
+        // Dibujar la imagen en el canvas
+        ctx.drawImage(img, 0, 0);
+        
+        // Convertir a JPEG (formato compatible garantizado)
+        const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        console.log("Imagen convertida exitosamente a JPEG");
+        resolve(jpegDataUrl);
+      };
+      
+      img.onerror = (err) => {
+        console.error("Error al cargar imagen para conversión:", err);
+        reject(new Error("Error al cargar imagen para conversión de formato"));
+      };
+      
+      img.src = imageDataUrl;
+    });
+  } catch (error) {
+    console.error("Error al convertir formato de imagen:", error);
+    throw new Error(`Error al convertir formato de imagen: ${error}`);
   }
 }
