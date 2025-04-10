@@ -2,10 +2,12 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { toast, Toaster } from 'react-hot-toast';
-import { FaImage, FaPaperPlane, FaUpload, FaTrash, FaDownload, FaMagic, FaRocket, FaRedo, FaEdit, FaCheck } from 'react-icons/fa';
+import { FaImage, FaPaperPlane, FaUpload, FaTrash, FaDownload, FaMagic, FaRocket, FaRedo, FaEdit, FaCheck, FaObjectGroup } from 'react-icons/fa';
 import { RiLoaderLine, RiMagicLine, RiChatSmile2Line, RiImageEditLine, RiRefreshLine, RiSendPlaneFill, RiDeleteBin6Line, RiEditBoxLine } from 'react-icons/ri';
+import { BsCamera, BsImageAlt, BsPalette, BsBox } from 'react-icons/bs';
 import { realTimeChatWithImage } from '../lib/gemini';
 import ImageDisplay from './ImageDisplay';
+import { analyzeImage, generateCreativePrompt, generateCompositionPrompt, CategorizedImages, ImageCategory } from '../lib/imageAnalyzer';
 
 type MessageType = {
   id: string;
@@ -34,6 +36,9 @@ const SUGERENCIAS = [
   "Añade un perro husky junto a la persona"
 ];
 
+// Constante para definir el límite máximo de mensajes en el historial
+const MAX_CHAT_HISTORY_LENGTH = 10; // Ajustable según necesidades
+
 export default function RealTimeChat() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<MessageType[]>([]);
@@ -42,6 +47,14 @@ export default function RealTimeChat() {
   const [chatHistory, setChatHistory] = useState<ChatHistoryType>([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  
+  // Nuevos estados para el modo Whisk
+  const [whiskMode, setWhiskMode] = useState<boolean>(false);
+  const [compositionMode, setCompositionMode] = useState<boolean>(false);
+  const [categorizedImages, setCategorizedImages] = useState<CategorizedImages>({});
+  const [analyzing, setAnalyzing] = useState<ImageCategory | null>(null);
+  const [showWhiskHelp, setShowWhiskHelp] = useState<boolean>(false);
+  const [showCompositionHelp, setShowCompositionHelp] = useState<boolean>(false);
   
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -115,27 +128,320 @@ export default function RealTimeChat() {
     }
   };
   
+  // Gestión de análisis de imagen por categoría
+  const handleCategoryImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, category: ImageCategory) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    // Verificar tipo y tamaño
+    if (!file.type.startsWith('image/')) {
+      toast.error('Por favor, selecciona un archivo de imagen');
+      return;
+    }
+    
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('La imagen es demasiado grande. Máximo 5MB');
+      return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      if (event.target?.result) {
+        const imageData = event.target.result.toString();
+        
+        // Actualizar estado con la nueva imagen
+        setCategorizedImages(prev => ({
+          ...prev,
+          [category]: imageData
+        }));
+        
+        // Mostrar que estamos analizando la imagen
+        setAnalyzing(category);
+        
+        // Notificar al usuario
+        toast.loading(`Analizando imagen de ${getCategoryName(category)}...`, {
+          id: `analyzing-${category}`,
+          style: {
+            borderRadius: '12px',
+            background: '#4338ca',
+            color: '#fff',
+          },
+        });
+        
+        try {
+          // Analizar la imagen con la API
+          const description = await analyzeImage(imageData, category);
+          
+          // Actualizar estado con la descripción
+          setCategorizedImages(prev => ({
+            ...prev,
+            [`${category}Descripcion`]: description
+          }));
+          
+          // Notificar éxito
+          toast.success(`¡Análisis de ${getCategoryName(category)} completado!`, {
+            id: `analyzing-${category}`,
+            icon: getCategoryIcon(category),
+            style: {
+              borderRadius: '12px',
+              background: '#4338ca',
+              color: '#fff',
+            },
+          });
+          
+          // Si tenemos al menos una imagen y una descripción, añadir un mensaje del sistema
+          const hasAnyDescription = 
+            categorizedImages.asuntoDescripcion || 
+            categorizedImages.escenaDescripcion || 
+            categorizedImages.estiloDescripcion || 
+            description;
+          
+          if (hasAnyDescription && !messages.some(m => m.role === 'model' && m.text?.includes('imágenes categorizadas'))) {
+            // Añadir un mensaje del sistema explicando qué hacer
+            setMessages(prev => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                role: 'model',
+                text: `He analizado tus imágenes categorizadas. Ahora puedes escribir instrucciones específicas sobre qué crear o modificar, y usaré la información de las imágenes como contexto.`,
+                timestamp: new Date()
+              }
+            ]);
+          }
+        } catch (error) {
+          console.error('Error al analizar imagen:', error);
+          toast.error(`Error al analizar la imagen de ${getCategoryName(category)}`, {
+            id: `analyzing-${category}`,
+          });
+        } finally {
+          setAnalyzing(null);
+        }
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  
+  const handleRemoveCategoryImage = (category: ImageCategory) => {
+    setCategorizedImages(prev => {
+      const updated = {...prev};
+      delete updated[category];
+      delete updated[`${category}Descripcion`];
+      return updated;
+    });
+    
+    toast.success(`Imagen de ${getCategoryName(category)} eliminada`, {
+      icon: '🗑️',
+      style: {
+        borderRadius: '12px',
+        background: '#4338ca',
+        color: '#fff',
+      },
+    });
+  };
+  
+  const getCategoryName = (category: ImageCategory): string => {
+    switch (category) {
+      case 'asunto': return 'Asunto';
+      case 'escena': return 'Escena';
+      case 'estilo': return 'Estilo';
+      case 'elementos': return 'Elementos';
+      default: return 'Categoría';
+    }
+  };
+  
+  const getCategoryIcon = (category: ImageCategory): string => {
+    switch (category) {
+      case 'asunto': return '👤';
+      case 'escena': return '🏞️';
+      case 'estilo': return '🎨';
+      case 'elementos': return '📦';
+      default: return '✨';
+    }
+  };
+  
+  const toggleWhiskMode = () => {
+    setWhiskMode(!whiskMode);
+    if (!whiskMode) {
+      // Si estamos activando el modo Whisk, desactivar el modo Composición
+      if (compositionMode) {
+        setCompositionMode(false);
+      }
+      
+      toast('Modo Whisk activado. Sube imágenes en las tres categorías para crear combinaciones mágicas.', {
+        icon: '✨',
+        duration: 5000,
+        style: {
+          borderRadius: '12px',
+          background: '#4338ca',
+          color: '#fff',
+        },
+      });
+      
+      // Añadir un mensaje informativo sobre el uso de inglés en modo Whisk
+      setMessages(prev => [
+        ...prev, 
+        {
+          id: Date.now().toString(),
+          role: 'model',
+          text: 'Para obtener los mejores resultados en modo Whisk, te recomiendo escribir tus instrucciones en inglés. Whisk está optimizado para generar prompts detallados en inglés para aprovechar al máximo las capacidades de IA de imagen. Si prefieres seguir en español, yo traduciré tus instrucciones internamente.',
+          timestamp: new Date()
+        }
+      ]);
+    } else {
+      // Si desactivamos el modo, limpiamos las imágenes categorizadas
+      setCategorizedImages({});
+    }
+  };
+  
+  // Función para alternar el modo Composición
+  const toggleCompositionMode = () => {
+    setCompositionMode(!compositionMode);
+    if (!compositionMode) {
+      // Si estamos activando el modo Composición, desactivar el modo Whisk
+      if (whiskMode) {
+        setWhiskMode(false);
+      }
+      
+      toast('Modo Composición activado. Sube un sujeto principal y los elementos a transferir con alta fidelidad.', {
+        icon: '🎯',
+        duration: 5000,
+        style: {
+          borderRadius: '12px',
+          background: '#3b82f6',
+          color: '#fff',
+        },
+      });
+      
+      // Añadir un mensaje informativo sobre el uso del modo Composición
+      setMessages(prev => [
+        ...prev, 
+        {
+          id: Date.now().toString(),
+          role: 'model',
+          text: 'Has activado el modo Composición, diseñado para transferir elementos con alta fidelidad visual. Sube una imagen del sujeto principal (persona, objeto) y otra imagen del elemento a transferir (caja, logo, producto). El sistema preservará la apariencia exacta de ambos en la composición final.',
+          timestamp: new Date()
+        }
+      ]);
+    } else {
+      // Si desactivamos el modo, limpiamos las imágenes categorizadas
+      setCategorizedImages({});
+    }
+  };
+  
   const handleSendMessage = async () => {
-    if (!input.trim() && !selectedImage) {
+    if (!input.trim() && !selectedImage && !Object.keys(categorizedImages).some(k => k in categorizedImages)) {
       toast.error('Por favor, escribe un mensaje o selecciona una imagen');
       return;
     }
     
+    // Definir las variables fuera del try para que estén disponibles en el catch
+    let finalPrompt = input;
+    let imageToUse = selectedImage;
+    
     try {
+      setIsLoading(true);
+      
+      // Limitar el historial a un número máximo de mensajes para evitar errores
+      if (chatHistory.length > MAX_CHAT_HISTORY_LENGTH) {
+        // Mantener solo el primer mensaje (instrucciones) y los mensajes más recientes
+        const newHistory = chatHistory.length > 0 
+          ? [chatHistory[0], ...chatHistory.slice(chatHistory.length - (MAX_CHAT_HISTORY_LENGTH - 1))]
+          : [];
+        
+        setChatHistory(newHistory);
+        console.log(`Historial limitado a ${newHistory.length} mensajes para evitar errores`);
+      }
+      
+      // Si estamos en modo Whisk y tenemos al menos una descripción, generar un prompt creativo
+      const hasAnyDescription = 
+        categorizedImages.asuntoDescripcion || 
+        categorizedImages.escenaDescripcion || 
+        categorizedImages.estiloDescripcion;
+      
+      // Si estamos en modo Composición y tenemos al menos la descripción del sujeto y los elementos
+      const hasCompositionElements = 
+        categorizedImages.asuntoDescripcion && 
+        categorizedImages.elementosDescripcion;
+      
+      if (whiskMode && hasAnyDescription) {
+        toast.loading('✨ Generando prompt creativo combinando tus imágenes...', {
+          id: 'generating-prompt',
+          style: {
+            borderRadius: '12px',
+            background: '#4338ca',
+            color: '#fff',
+          },
+        });
+        
+        // Generar un prompt creativo basado en las imágenes y la entrada del usuario
+        finalPrompt = await generateCreativePrompt(categorizedImages, input);
+        
+        // Mostrar información sobre el prompt generado
+        console.log('Prompt creativo generado en inglés:', finalPrompt);
+        
+        toast.success('Prompt creativo generado', {
+          id: 'generating-prompt',
+        });
+        
+        // Usar la imagen principal como referencia si existe
+        if (categorizedImages.asunto) {
+          imageToUse = categorizedImages.asunto;
+        } else if (categorizedImages.escena) {
+          imageToUse = categorizedImages.escena;
+        } else if (categorizedImages.estilo) {
+          imageToUse = categorizedImages.estilo;
+        }
+      }
+      // Si estamos en modo Composición y tenemos los elementos necesarios
+      else if (compositionMode && hasCompositionElements) {
+        toast.loading('🎯 Generando prompt de composición con transferencia precisa...', {
+          id: 'generating-prompt',
+          style: {
+            borderRadius: '12px',
+            background: '#3b82f6',
+            color: '#fff',
+          },
+        });
+        
+        // Generar un prompt específico para composición con transferencia de elementos
+        finalPrompt = await generateCompositionPrompt(categorizedImages, input);
+        
+        // Mostrar información sobre el prompt generado
+        console.log('Prompt de composición generado:', finalPrompt);
+        
+        toast.success('Prompt de composición generado', {
+          id: 'generating-prompt',
+        });
+        
+        // Usar la imagen del sujeto como referencia principal
+        if (categorizedImages.asunto) {
+          imageToUse = categorizedImages.asunto;
+        }
+        
+        // Enviar también la imagen del elemento como segunda imagen
+        // Nota: Esta funcionalidad requeriría modificaciones en realTimeChatWithImage
+        // para soportar múltiples imágenes, lo cual está fuera del alcance actual
+      }
+      
       // Agregar mensaje del usuario a la interfaz
       const userMessageId = Date.now().toString();
       const userMessage: MessageType = {
         id: userMessageId,
         role: 'user',
         text: input,
-        imageUrl: selectedImage || undefined,
+        imageUrl: whiskMode 
+          ? undefined // En modo Whisk no mostramos las imágenes en el mensaje (ya están en los slots)
+          : imageToUse || undefined,
         timestamp: new Date()
       };
       
       setMessages(prev => [...prev, userMessage]);
       setInput('');
-      setSelectedImage(null);
-      setIsLoading(true);
+      
+      if (!whiskMode) {
+        setSelectedImage(null);
+      }
+      
       setSelectedSuggestion(null);
       
       if (fileInputRef.current) {
@@ -143,7 +449,8 @@ export default function RealTimeChat() {
       }
       
       // Mostrar toast animado durante el procesamiento
-      toast.loading('✨ Procesando tu solicitud con magia de IA...', {
+      toast.loading('🧙‍♂️ Creando magia con tus imágenes y texto...', {
+        id: 'processing-request',
         style: {
           borderRadius: '12px',
           background: '#4338ca',
@@ -153,8 +460,8 @@ export default function RealTimeChat() {
       
       // Enviar al modelo y procesar respuesta
       const response = await realTimeChatWithImage(
-        input,
-        selectedImage || undefined,
+        finalPrompt, // Usamos el prompt potencialmente modificado
+        imageToUse || undefined,
         chatHistory
       );
       
@@ -170,7 +477,7 @@ export default function RealTimeChat() {
         timestamp: new Date()
       };
       
-      toast.dismiss();
+      toast.dismiss('processing-request');
       setMessages(prev => [...prev, modelMessage]);
       setIsLoading(false);
       
@@ -199,51 +506,74 @@ export default function RealTimeChat() {
       setTimeout(scrollToBottom, 100);
       
     } catch (error) {
-      console.error('Error al enviar mensaje:', error);
-      
-      // Mejorar los mensajes de error para el usuario
-      let errorMessage = 'Error al procesar tu mensaje. Por favor, intenta de nuevo.';
-      let errorIcon = '❌';
-      
-      // Detectar tipos específicos de errores
-      const errorStr = error instanceof Error 
-        ? error.toString() 
-        : typeof error === 'string' 
-          ? error 
-          : 'Error desconocido';
-      
-      if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
-        errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
-                      '\n• Has realizado muchas regeneraciones consecutivas' +
-                      '\n• El prompt es demasiado complejo' +
-                      '\n• Hay problemas temporales con el servicio' +
-                      '\n\nRecomendaciones:' +
-                      '\n• Espera unos minutos y vuelve a intentarlo' +
-                      '\n• Intenta con un prompt más simple' +
-                      '\n• Comienza una nueva conversación';
-        errorIcon = '🔄';
-      } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT')) {
-        errorMessage = 'La conexión con el servidor de IA ha excedido el tiempo de espera. ' +
-                      'Verifica tu conexión a internet e intenta de nuevo.';
-        errorIcon = '⏱️';
-      } else if (errorStr.includes('quota') || errorStr.includes('rate limit')) {
-        errorMessage = 'Has alcanzado el límite de solicitudes a la API. ' +
-                      'Espera unos minutos antes de intentar nuevamente.';
-        errorIcon = '⚠️';
-      }
-      
-      toast.error(errorMessage, {
-        icon: errorIcon,
-        duration: 7000, // Duración más larga para mensajes de error detallados
-        style: {
-          borderRadius: '12px',
-          background: '#ef4444',
-          color: '#fff',
-          maxWidth: '500px', // Ancho mayor para mensajes más largos
-          whiteSpace: 'pre-line' // Permite saltos de línea en el mensaje
-        },
-      });
       setIsLoading(false);
+      console.error('Error al enviar el mensaje:', error);
+      
+      // Mejorar el manejo de errores
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+      
+      // Si el error parece relacionado con el tamaño del historial o respuesta inválida
+      if (errorMessage.includes('respuesta válida') || 
+          errorMessage.includes('No se recibió una respuesta válida') ||
+          errorMessage.includes('payload too large')) {
+        
+        // Reducir el historial a la mitad y reintentar automáticamente
+        const originalLength = chatHistory.length;
+        
+        if (originalLength > 2) {
+          toast.loading('Ajustando conversación para resolver el error...', {id: 'retry'});
+          console.log(`Error detectado con el historial. Intentando reducir de ${originalLength} mensajes.`);
+          
+          // Mantener solo el primer mensaje y la mitad de los mensajes recientes
+          const reducedHistory = originalLength > 0 
+            ? [chatHistory[0], ...chatHistory.slice(Math.ceil(originalLength / 2))]
+            : [];
+          
+          setChatHistory(reducedHistory);
+          console.log(`Historial reducido a ${reducedHistory.length} mensajes.`);
+          
+          // Reintentar la solicitud con menos contexto
+          try {
+            // Reintentar la solicitud con el historial reducido
+            const response = await realTimeChatWithImage(
+              finalPrompt,
+              imageToUse || undefined,
+              reducedHistory
+            );
+            
+            // Actualizar historial para futuras interacciones
+            setChatHistory(response.history);
+            
+            // Agregar respuesta del modelo a la interfaz
+            const modelMessage: MessageType = {
+              id: Date.now().toString(),
+              role: 'model',
+              text: response.text,
+              imageUrl: response.imageData,
+              timestamp: new Date()
+            };
+            
+            setMessages(prev => [...prev, modelMessage]);
+            setIsLoading(false);
+            
+            toast.success('¡Problema resuelto!', {id: 'retry'});
+            
+            // Scroll al nuevo mensaje
+            setTimeout(scrollToBottom, 100);
+            return; // Terminar la ejecución si se resolvió con éxito
+          } catch (retryError) {
+            // Si aún falla, notificar al usuario
+            console.error('Error en el segundo intento:', retryError);
+            toast.error('No se pudo resolver automáticamente. Intenta limpiar el chat.', {id: 'retry'});
+          }
+        } else {
+          toast.error('Error en la respuesta del modelo. Intenta limpiar el chat y comenzar de nuevo.');
+        }
+      } else {
+        // Errores generales
+        toast.error('Error al procesar tu solicitud: ' + 
+                   (errorMessage.length > 50 ? errorMessage.substring(0, 50) + '...' : errorMessage));
+      }
     }
   };
   
@@ -332,47 +662,11 @@ export default function RealTimeChat() {
       }
     } catch (error) {
       console.error('Error al regenerar imagen:', error);
-      
-      // Mejorar los mensajes de error para el usuario
-      let errorMessage = 'Error al regenerar la imagen. Por favor, intenta de nuevo.';
-      let errorIcon = '❌';
-      
-      // Detectar tipos específicos de errores
-      const errorStr = error instanceof Error 
-        ? error.toString() 
-        : typeof error === 'string' 
-          ? error 
-          : 'Error desconocido';
-      
-      if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
-        errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
-                      '\n• Has realizado muchas regeneraciones consecutivas' +
-                      '\n• El prompt es demasiado complejo' +
-                      '\n• Hay problemas temporales con el servicio' +
-                      '\n\nRecomendaciones:' +
-                      '\n• Espera unos minutos y vuelve a intentarlo' +
-                      '\n• Intenta con un prompt más simple' +
-                      '\n• Comienza una nueva conversación';
-        errorIcon = '🔄';
-      } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT')) {
-        errorMessage = 'La conexión con el servidor de IA ha excedido el tiempo de espera. ' +
-                      'Verifica tu conexión a internet e intenta de nuevo.';
-        errorIcon = '⏱️';
-      } else if (errorStr.includes('quota') || errorStr.includes('rate limit')) {
-        errorMessage = 'Has alcanzado el límite de solicitudes a la API. ' +
-                      'Espera unos minutos antes de intentar nuevamente.';
-        errorIcon = '⚠️';
-      }
-      
-      toast.error(errorMessage, {
-        icon: errorIcon,
-        duration: 7000, // Duración más larga para mensajes de error detallados
+      toast.error('Error al regenerar la imagen. Por favor, intenta de nuevo.', {
         style: {
           borderRadius: '12px',
           background: '#ef4444',
           color: '#fff',
-          maxWidth: '500px', // Ancho mayor para mensajes más largos
-          whiteSpace: 'pre-line' // Permite saltos de línea en el mensaje
         },
       });
       setIsLoading(false);
@@ -586,47 +880,11 @@ export default function RealTimeChat() {
       
     } catch (error) {
       console.error('Error al procesar mensaje editado:', error);
-      
-      // Mejorar los mensajes de error para el usuario
-      let errorMessage = 'Error al procesar tu mensaje. Por favor, intenta de nuevo.';
-      let errorIcon = '❌';
-      
-      // Detectar tipos específicos de errores
-      const errorStr = error instanceof Error 
-        ? error.toString() 
-        : typeof error === 'string' 
-          ? error 
-          : 'Error desconocido';
-      
-      if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
-        errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
-                      '\n• Has realizado muchas regeneraciones consecutivas' +
-                      '\n• El prompt es demasiado complejo' +
-                      '\n• Hay problemas temporales con el servicio' +
-                      '\n\nRecomendaciones:' +
-                      '\n• Espera unos minutos y vuelve a intentarlo' +
-                      '\n• Intenta con un prompt más simple' +
-                      '\n• Comienza una nueva conversación';
-        errorIcon = '🔄';
-      } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT')) {
-        errorMessage = 'La conexión con el servidor de IA ha excedido el tiempo de espera. ' +
-                      'Verifica tu conexión a internet e intenta de nuevo.';
-        errorIcon = '⏱️';
-      } else if (errorStr.includes('quota') || errorStr.includes('rate limit')) {
-        errorMessage = 'Has alcanzado el límite de solicitudes a la API. ' +
-                      'Espera unos minutos antes de intentar nuevamente.';
-        errorIcon = '⚠️';
-      }
-      
-      toast.error(errorMessage, {
-        icon: errorIcon,
-        duration: 7000, // Duración más larga para mensajes de error detallados
+      toast.error('Error al procesar tu mensaje. Por favor, intenta de nuevo.', {
         style: {
           borderRadius: '12px',
           background: '#ef4444',
           color: '#fff',
-          maxWidth: '500px', // Ancho mayor para mensajes más largos
-          whiteSpace: 'pre-line' // Permite saltos de línea en el mensaje
         },
       });
       setIsLoading(false);
@@ -650,8 +908,14 @@ export default function RealTimeChat() {
     // Encontrar el mensaje a reenviar
     const messageToResend = messages.find(msg => msg.id === messageId);
     
-    if (!messageToResend || !messageToResend.text) {
+    if (!messageToResend) {
       toast.error('No se pudo reenviar el mensaje');
+      return;
+    }
+    
+    // Verificar que haya texto o imagen para enviar
+    if (!messageToResend.text && !messageToResend.imageUrl) {
+      toast.error('No hay contenido para reenviar. Necesitas texto o imagen.');
       return;
     }
     
@@ -669,7 +933,7 @@ export default function RealTimeChat() {
       
       // Enviar al modelo y procesar respuesta
       const response = await realTimeChatWithImage(
-        messageToResend.text,
+        messageToResend.text || "Analiza esta imagen", // Asegurar que siempre hay texto
         messageToResend.imageUrl,
         chatHistory
       );
@@ -716,429 +980,641 @@ export default function RealTimeChat() {
       
     } catch (error) {
       console.error('Error al reenviar mensaje:', error);
-      
-      // Mejorar los mensajes de error para el usuario
-      let errorMessage = 'Error al procesar tu mensaje. Por favor, intenta de nuevo.';
-      let errorIcon = '❌';
-      
-      // Detectar tipos específicos de errores
-      const errorStr = error instanceof Error 
-        ? error.toString() 
-        : typeof error === 'string' 
-          ? error 
-          : 'Error desconocido';
-      
-      if (errorStr.includes('[500]') && errorStr.includes('generativelanguage.googleapis.com')) {
-        errorMessage = 'Error interno del servidor de IA. Esto puede ocurrir cuando:' +
-                      '\n• Has realizado muchas regeneraciones consecutivas' +
-                      '\n• El prompt es demasiado complejo' +
-                      '\n• Hay problemas temporales con el servicio' +
-                      '\n\nRecomendaciones:' +
-                      '\n• Espera unos minutos y vuelve a intentarlo' +
-                      '\n• Intenta con un prompt más simple' +
-                      '\n• Comienza una nueva conversación';
-        errorIcon = '🔄';
-      } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT')) {
-        errorMessage = 'La conexión con el servidor de IA ha excedido el tiempo de espera. ' +
-                      'Verifica tu conexión a internet e intenta de nuevo.';
-        errorIcon = '⏱️';
-      } else if (errorStr.includes('quota') || errorStr.includes('rate limit')) {
-        errorMessage = 'Has alcanzado el límite de solicitudes a la API. ' +
-                      'Espera unos minutos antes de intentar nuevamente.';
-        errorIcon = '⚠️';
-      }
-      
-      toast.error(errorMessage, {
-        icon: errorIcon,
-        duration: 7000, // Duración más larga para mensajes de error detallados
+      toast.error('Error al procesar tu mensaje. Por favor, intenta de nuevo.', {
         style: {
           borderRadius: '12px',
           background: '#ef4444',
           color: '#fff',
-          maxWidth: '500px', // Ancho mayor para mensajes más largos
-          whiteSpace: 'pre-line' // Permite saltos de línea en el mensaje
         },
       });
       setIsLoading(false);
     }
   };
   
+  // Función para limpiar completamente el historial de chat
+  const handleClearChat = () => {
+    // Mantener solo el primer mensaje si contiene instrucciones importantes
+    setChatHistory(chatHistory.length > 0 ? [chatHistory[0]] : []);
+    setMessages([]);
+    toast.success('Chat limpiado correctamente', {
+      icon: '🧹',
+      style: {
+        borderRadius: '12px',
+        background: '#4338ca',
+        color: '#fff',
+      },
+    });
+  };
+  
   return (
-    <>
-      <div className="flex flex-col h-full">
-        <Toaster position="top-right" />
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-50 flex flex-col p-4 md:p-6">
+      <Toaster position="top-right" />
+      
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold text-indigo-700">Chat en Tiempo Real</h1>
         
-        <div className="flex-1 bg-gradient-to-b from-indigo-600 to-violet-700 rounded-2xl shadow-xl overflow-hidden flex flex-col">
-          {/* Encabezado con estilo moderno */}
-          <div className="p-6 text-white relative overflow-hidden">
-            <div className="absolute inset-0 bg-black opacity-10 rounded-b-[50%] scale-150 -translate-y-1/2"></div>
-            <div className="absolute -right-10 -top-10 w-40 h-40 bg-purple-400 rounded-full opacity-20"></div>
-            <div className="absolute -left-10 -bottom-14 w-40 h-40 bg-indigo-300 rounded-full opacity-20"></div>
-            
-            <div className="relative z-10 flex items-center">
-              <div className="flex justify-center items-center w-12 h-12 bg-white bg-opacity-20 rounded-xl mr-4 backdrop-blur-sm">
-                <RiChatSmile2Line className="text-2xl text-white" />
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold">Chat Visual Interactivo</h2>
-                <p className="text-indigo-100 text-sm mt-1">
-                  Conversa y edita imágenes en tiempo real con IA
-                </p>
-              </div>
-            </div>
-          </div>
-          
-          {/* Área de mensajes con estilo mejorado */}
-          <div 
-            ref={chatContainerRef}
-            className="flex-1 p-6 overflow-y-auto bg-white dark:bg-gray-900 min-h-[50vh] max-h-[calc(100vh-330px)]"
+        <div className="flex space-x-2">
+          <button
+            onClick={handleClearChat}
+            className="px-3 py-1.5 rounded-lg flex items-center text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+            title="Limpiar conversación"
           >
-            {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-center text-gray-500 p-6">
-                <div className="w-24 h-24 bg-indigo-100 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6">
-                  <RiImageEditLine className="text-5xl text-indigo-500 dark:text-indigo-400" />
-                </div>
-                <h3 className="text-2xl font-bold mb-3 text-indigo-700 dark:text-indigo-300">¡Bienvenido al Chat Visual!</h3>
-                <p className="max-w-md text-gray-600 dark:text-gray-400 mb-8">
-                  Carga una imagen y dinos cómo quieres modificarla. También puedes preguntar sobre la imagen o solicitar variaciones creativas.
-                </p>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
-                  >
-                    <FaImage className="text-lg" />
-                    Subir una imagen
-                  </button>
-                  <button 
-                    onClick={() => setInput("¿Qué puedes hacer con mis imágenes?")}
-                    className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-pink-500 to-rose-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
-                  >
-                    <FaMagic className="text-lg" />
-                    Explorar capacidades
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${
-                      message.role === 'user' ? 'justify-end' : 'justify-start'
-                    }`}
-                  >
-                    {/* Botones de acción para mensajes del usuario */}
-                    {message.role === 'user' && (
-                      <div className="flex flex-col mr-2 space-y-2 justify-center">
-                        <button
-                          onClick={() => handleEditUserMessage(message.id)}
-                          className="p-2 bg-purple-500 text-white rounded-full shadow-lg hover:bg-purple-600 transition-all duration-200 hover:scale-110 hover:rotate-12"
-                          aria-label="Editar mensaje"
-                          disabled={isLoading || editingMessageId !== null}
-                        >
-                          <RiEditBoxLine className="text-white" size={16} />
-                        </button>
-                        <button
-                          onClick={() => handleResendMessage(message.id)}
-                          className="p-2 bg-emerald-500 text-white rounded-full shadow-lg hover:bg-emerald-600 transition-all duration-200 hover:scale-110 hover:rotate-12"
-                          aria-label="Reenviar mensaje"
-                          disabled={isLoading}
-                        >
-                          <RiSendPlaneFill className="text-white" size={16} />
-                        </button>
-                      </div>
-                    )}
-                    
-                    <div
-                      className={`max-w-[80%] rounded-2xl shadow-md p-4 ${
-                        message.role === 'user'
-                          ? 'bg-gradient-to-br from-indigo-600 to-violet-700 text-white rounded-br-none relative'
-                          : 'bg-gradient-to-br from-gray-100 to-white dark:from-gray-800 dark:to-gray-700 dark:text-white rounded-bl-none border border-gray-200 dark:border-gray-600'
-                      }`}
-                    >
-                      {/* Botón de eliminar dentro de la burbuja del mensaje del usuario */}
-                      {message.role === 'user' && !message.isEditing && (
-                        <button
-                          onClick={() => handleDeleteUserMessage(message.id)}
-                          className="absolute bottom-2 right-2 p-1.5 bg-red-500 bg-opacity-80 text-white rounded-full hover:bg-red-600 transition-all duration-200 hover:scale-110"
-                          aria-label="Eliminar mensaje"
-                          disabled={isLoading}
-                        >
-                          <RiDeleteBin6Line className="text-white" size={14} />
-                        </button>
-                      )}
-                      
-                      {message.isEditing ? (
-                        <div className="relative">
-                          <textarea
-                            defaultValue={message.text}
-                            className="w-full bg-indigo-700 border border-indigo-500 rounded-lg p-3 pr-24 text-white focus:ring-2 focus:ring-indigo-400 focus:outline-none min-h-[80px] scrollbar-hide"
-                            rows={3}
-                            autoFocus
-                          />
-                          <div className="absolute right-3 top-3 flex space-x-2">
-                            <button
-                              onClick={() => {
-                                const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
-                                handleSaveEdit(message.id, textarea.value);
-                              }}
-                              className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 shadow-md"
-                              aria-label="Guardar edición"
-                            >
-                              <FaCheck size={14} />
-                            </button>
-                            <button
-                              onClick={handleCancelEdit}
-                              className="p-2 bg-gray-500 text-white rounded-full hover:bg-gray-600 shadow-md"
-                              aria-label="Cancelar edición"
-                            >
-                              <FaTrash size={14} />
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="mb-3 leading-relaxed">{message.text}</p>
-                      )}
-                      
-                      {message.imageUrl && (
-                        <div className="relative mt-2 rounded-xl overflow-hidden shadow-lg">
-                          <ImageDisplay 
-                            src={message.imageUrl} 
-                            alt={`Imagen en mensaje de ${message.role === 'user' ? 'usuario' : 'AI'}`} 
-                          />
-                          
-                          {message.role === 'model' && message.imageUrl && (
-                            <div className="absolute top-2 right-2 flex gap-2">
-                              <button
-                                onClick={() => handleRegenerateImage(message.id)}
-                                className="p-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg hover:bg-indigo-100 transition-all duration-200 hover:scale-110"
-                                aria-label="Regenerar imagen"
-                                disabled={isLoading}
-                              >
-                                <RiRefreshLine className="text-emerald-600" />
-                              </button>
-                              <button
-                                onClick={() => handleDownloadImage(message.imageUrl!)}
-                                className="p-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg hover:bg-indigo-100 transition-all duration-200 hover:scale-110"
-                                aria-label="Descargar imagen"
-                              >
-                                <FaDownload className="text-indigo-600" />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteImage(message.id)}
-                                className="p-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg hover:bg-red-100 transition-all duration-200 hover:scale-110"
-                                aria-label="Eliminar imagen"
-                              >
-                                <FaTrash className="text-red-600" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      
-                      <div className={`text-xs mt-2 flex items-center ${
-                        message.role === 'user' ? 'text-indigo-100 justify-start' : 'text-gray-500 dark:text-gray-400 justify-end'
-                      }`}>
-                        <span className="opacity-80">{message.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                        {message.role === 'model' && (
-                          <span className="ml-1 flex items-center">
-                            <FaRocket className="ml-1 text-indigo-500 dark:text-indigo-400" />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                
-                {isLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-gradient-to-br from-gray-100 to-white dark:from-gray-800 dark:to-gray-700 p-4 rounded-2xl max-w-[80%] rounded-bl-none shadow-md border border-gray-200 dark:border-gray-600">
-                      <div className="flex items-center space-x-3">
-                        <div className="flex space-x-1">
-                          <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                          <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                          <div className="w-2 h-2 bg-pink-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                        </div>
-                        <span className="text-gray-600 dark:text-gray-300 font-medium">
-                          Creando magia visual...
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                <div ref={messagesEndRef} />
-              </div>
-            )}
-          </div>
+            <FaTrash className="mr-1.5" />
+            Limpiar chat
+          </button>
           
-          {/* Sugerencias de prompts */}
-          {messages.length > 0 && !isLoading && (
-            <div className="bg-indigo-50 dark:bg-gray-800/70 px-4 py-3 border-t border-indigo-100 dark:border-gray-700 relative">
-              <div className="flex items-center">
-                <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300 whitespace-nowrap mr-3 flex-shrink-0">Sugerencias:</span>
-                <div className="flex gap-2 overflow-x-auto py-1.5 px-0.5 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-300/50 dark:scrollbar-thumb-gray-600/50 pr-6 md:pr-0">
-                  {SUGERENCIAS.map((sugerencia, index) => (
-                    <button
-                      key={index}
-                      onClick={() => handleUseSuggestion(index)}
-                      className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap transition-all ${
-                        selectedSuggestion === index
-                          ? 'bg-indigo-600 text-white shadow-md scale-105'
-                          : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-indigo-100 dark:hover:bg-gray-600 hover:shadow-sm'
-                      } border border-indigo-200 dark:border-gray-600 flex-shrink-0`}
-                    >
-                      {sugerencia}
-                    </button>
-                  ))}
-                </div>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 bg-gradient-to-l from-indigo-50 dark:from-gray-800/90 to-transparent w-6 h-8 pointer-events-none md:hidden"></div>
-              </div>
-            </div>
-          )}
+          <button
+            onClick={toggleWhiskMode}
+            className={`px-3 py-1.5 rounded-lg flex items-center text-sm font-medium transition-colors ${
+              whiskMode 
+                ? 'bg-indigo-600 text-white' 
+                : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+            }`}
+          >
+            <FaMagic className="mr-1.5" />
+            Modo Whisk
+          </button>
           
-          {/* Área de previsualización de imagen */}
-          {selectedImage && (
-            <div className="p-3 border-t border-indigo-200 dark:border-gray-700 bg-indigo-50 dark:bg-gray-800/50">
-              <div className="flex items-center">
-                <div className="mr-3">
-                  <div className="relative w-16 h-16 rounded-lg overflow-hidden border-2 border-indigo-300 dark:border-indigo-700 shadow-md">
-                    <img
-                      src={selectedImage}
-                      alt="Imagen seleccionada"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Imagen lista para editar</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Describe cómo quieres modificarla</p>
-                </div>
+          <button
+            onClick={toggleCompositionMode}
+            className={`px-3 py-1.5 rounded-lg flex items-center text-sm font-medium transition-colors ${
+              compositionMode 
+                ? 'bg-blue-600 text-white' 
+                : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+            }`}
+          >
+            <FaObjectGroup className="mr-1.5" />
+            Modo Composición
+          </button>
+          
+          <button
+            onClick={() => setShowWhiskHelp(!showWhiskHelp)}
+            className="p-2 rounded-full bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+            aria-label="Ayuda Whisk"
+            title="Ayuda para modo Whisk"
+          >
+            ?
+          </button>
+          
+          <button
+            onClick={() => setShowCompositionHelp(!showCompositionHelp)}
+            className="p-2 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200"
+            aria-label="Ayuda Composición"
+            title="Ayuda para modo Composición"
+          >
+            ?
+          </button>
+        </div>
+      </div>
+      
+      {showWhiskHelp && (
+        <div className="mb-4 p-4 bg-white rounded-xl shadow-md border border-indigo-100 text-sm">
+          <h3 className="font-bold text-indigo-700 mb-2">¿Cómo funciona el Modo Whisk?</h3>
+          <p className="mb-2">Inspirado en Whisk, esta herramienta te permite categorizar imágenes para crear magia:</p>
+          <ol className="list-decimal pl-5 space-y-1">
+            <li><b>Asunto:</b> Sube una imagen del elemento principal que quieres en tu creación</li>
+            <li><b>Escena:</b> Sube una imagen del entorno o fondo que deseas</li>
+            <li><b>Estilo:</b> Sube una imagen que represente el estilo visual que buscas</li>
+            <li><b>Escribe instrucciones</b> y la IA combinará todo para crear algo único</li>
+          </ol>
+          <button
+            onClick={() => setShowWhiskHelp(false)}
+            className="mt-3 text-indigo-600 font-medium"
+          >
+            Entendido
+          </button>
+        </div>
+      )}
+      
+      {showCompositionHelp && (
+        <div className="mb-4 p-4 bg-white rounded-xl shadow-md border border-blue-100 text-sm">
+          <h3 className="font-bold text-blue-700 mb-2">¿Cómo funciona el Modo Composición?</h3>
+          <p className="mb-2">Este modo está diseñado para transferir elementos visuales con alta fidelidad:</p>
+          <ol className="list-decimal pl-5 space-y-1">
+            <li><b>Asunto:</b> Sube una imagen del sujeto principal (persona, objeto, etc.)</li>
+            <li><b>Elementos:</b> Sube una imagen de los elementos a transferir con alta fidelidad (caja, logo, producto)</li>
+            <li><b>Escena (opcional):</b> Sube una imagen del entorno donde se situará la composición</li>
+            <li><b>Estilo (opcional):</b> Sube una imagen que represente el estilo visual deseado</li>
+            <li><b>Escribe instrucciones específicas</b> sobre cómo quieres que interactúen estos elementos</li>
+          </ol>
+          <p className="mt-2 text-blue-700 font-medium">Este modo está optimizado para preservar los detalles visuales exactos de los elementos a transferir, como textos, logos, colores y diseños específicos.</p>
+          <button
+            onClick={() => setShowCompositionHelp(false)}
+            className="mt-3 text-blue-600 font-medium"
+          >
+            Entendido
+          </button>
+        </div>
+      )}
+      
+      {/* Panel de imágenes categorizadas - Solo visible en modo Whisk */}
+      {(whiskMode || compositionMode) && (
+        <div className="mb-4 p-4 bg-white rounded-xl shadow-md grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Asunto */}
+          <div className="border border-indigo-100 rounded-lg p-3">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-medium text-indigo-700 flex items-center">
+                <BsCamera className="mr-1.5" /> Asunto
+              </h3>
+              {categorizedImages.asunto ? (
                 <button
-                  onClick={handleRemoveImage}
-                  className="p-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full hover:bg-red-200 dark:hover:bg-red-800/30 transition-all"
+                  onClick={() => handleRemoveCategoryImage('asunto')}
+                  className="p-1 rounded-full hover:bg-red-100 text-red-500"
                   aria-label="Eliminar imagen"
                 >
                   <FaTrash size={14} />
                 </button>
+              ) : null}
+            </div>
+            
+            {categorizedImages.asunto ? (
+              <div className="relative">
+                <img 
+                  src={categorizedImages.asunto} 
+                  alt="Imagen de asunto" 
+                  className="w-full h-32 object-contain mb-2 rounded"
+                />
               </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-indigo-200 rounded-lg bg-indigo-50 mb-2">
+                <label className="cursor-pointer p-2 w-full h-full flex flex-col items-center justify-center">
+                  <BsCamera size={24} className="text-indigo-300 mb-2" />
+                  <span className="text-xs text-indigo-500">Subir imagen de asunto</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleCategoryImageUpload(e, 'asunto')}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            )}
+            
+            {categorizedImages.asuntoDescripcion && (
+              <div className="text-xs text-gray-500 max-h-20 overflow-y-auto p-2 bg-gray-50 rounded">
+                {categorizedImages.asuntoDescripcion}
+              </div>
+            )}
+          </div>
+          
+          {/* Si estamos en modo Composición, mostrar panel de Elementos */}
+          {compositionMode && (
+            <div className="border border-blue-100 rounded-lg p-3">
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="font-medium text-blue-700 flex items-center">
+                  <BsBox className="mr-1.5" /> Elementos
+                </h3>
+                {categorizedImages.elementos ? (
+                  <button
+                    onClick={() => handleRemoveCategoryImage('elementos')}
+                    className="p-1 rounded-full hover:bg-red-100 text-red-500"
+                    aria-label="Eliminar imagen"
+                  >
+                    <FaTrash size={14} />
+                  </button>
+                ) : null}
+              </div>
+              
+              {categorizedImages.elementos ? (
+                <div className="relative">
+                  <img 
+                    src={categorizedImages.elementos} 
+                    alt="Imagen de elementos" 
+                    className="w-full h-32 object-contain mb-2 rounded"
+                  />
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-blue-200 rounded-lg bg-blue-50 mb-2">
+                  <label className="cursor-pointer p-2 w-full h-full flex flex-col items-center justify-center">
+                    <BsBox size={24} className="text-blue-300 mb-2" />
+                    <span className="text-xs text-blue-500">Subir elementos a transferir</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleCategoryImageUpload(e, 'elementos')}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              )}
+              
+              {categorizedImages.elementosDescripcion && (
+                <div className="text-xs text-gray-500 max-h-20 overflow-y-auto p-2 bg-gray-50 rounded">
+                  {categorizedImages.elementosDescripcion}
+                </div>
+              )}
             </div>
           )}
           
-          {/* Área de entrada centrada y con mejor alineación de botones */}
-          <div className="border-t border-indigo-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800/80">
-            <div className="bg-white dark:bg-gray-700 rounded-xl shadow-md flex items-center border border-gray-200 dark:border-gray-600">
-              {/* Botón para subir imagen */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="p-3 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-gray-600 rounded-lg transition-colors flex-shrink-0 self-stretch flex items-center"
-                disabled={isLoading}
-                title="Subir imagen"
-                aria-label="Subir imagen"
-              >
-                <FaUpload size={18} />
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  className="hidden"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                />
-              </button>
-              
-              {/* Campo de texto con botón de envío */}
-              <div className="flex-1 relative min-w-0">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={handleInputChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Escribe un mensaje o instrucción para editar la imagen..."
-                  className="w-full border-0 focus:ring-0 bg-transparent text-gray-700 dark:text-white py-3 pl-2 pr-12 resize-none min-h-[48px] max-h-[80px] leading-tight scrollbar-hide"
-                  rows={1}
-                  disabled={isLoading}
-                />
-                
-                {/* Botón de envío sobre el textarea */}
+          {/* Escena */}
+          <div className="border border-indigo-100 rounded-lg p-3">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-medium text-indigo-700 flex items-center">
+                <BsImageAlt className="mr-1.5" /> Escena
+              </h3>
+              {categorizedImages.escena ? (
                 <button
-                  onClick={handleSendMessage}
-                  disabled={isLoading || (!input.trim() && !selectedImage)}
-                  className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-all ${
-                    isLoading || (!input.trim() && !selectedImage)
-                      ? 'bg-gray-200 dark:bg-gray-600 text-gray-400 dark:text-gray-500 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-md hover:from-indigo-700 hover:to-purple-700'
-                  }`}
-                  aria-label="Enviar mensaje"
+                  onClick={() => handleRemoveCategoryImage('escena')}
+                  className="p-1 rounded-full hover:bg-red-100 text-red-500"
+                  aria-label="Eliminar imagen"
                 >
-                  <FaPaperPlane className="h-4 w-4" />
+                  <FaTrash size={14} />
+                </button>
+              ) : null}
+            </div>
+            
+            {categorizedImages.escena ? (
+              <div className="relative">
+                <img 
+                  src={categorizedImages.escena} 
+                  alt="Imagen de escena" 
+                  className="w-full h-32 object-contain mb-2 rounded"
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-indigo-200 rounded-lg bg-indigo-50 mb-2">
+                <label className="cursor-pointer p-2 w-full h-full flex flex-col items-center justify-center">
+                  <BsImageAlt size={24} className="text-indigo-300 mb-2" />
+                  <span className="text-xs text-indigo-500">Subir imagen de escena</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleCategoryImageUpload(e, 'escena')}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            )}
+            
+            {categorizedImages.escenaDescripcion && (
+              <div className="text-xs text-gray-500 max-h-20 overflow-y-auto p-2 bg-gray-50 rounded">
+                {categorizedImages.escenaDescripcion}
+              </div>
+            )}
+          </div>
+          
+          {/* Estilo */}
+          <div className="border border-indigo-100 rounded-lg p-3">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-medium text-indigo-700 flex items-center">
+                <BsPalette className="mr-1.5" /> Estilo
+              </h3>
+              {categorizedImages.estilo ? (
+                <button
+                  onClick={() => handleRemoveCategoryImage('estilo')}
+                  className="p-1 rounded-full hover:bg-red-100 text-red-500"
+                  aria-label="Eliminar imagen"
+                >
+                  <FaTrash size={14} />
+                </button>
+              ) : null}
+            </div>
+            
+            {categorizedImages.estilo ? (
+              <div className="relative">
+                <img 
+                  src={categorizedImages.estilo} 
+                  alt="Imagen de estilo" 
+                  className="w-full h-32 object-contain mb-2 rounded"
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-indigo-200 rounded-lg bg-indigo-50 mb-2">
+                <label className="cursor-pointer p-2 w-full h-full flex flex-col items-center justify-center">
+                  <BsPalette size={24} className="text-indigo-300 mb-2" />
+                  <span className="text-xs text-indigo-500">Subir estilo visual</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleCategoryImageUpload(e, 'estilo')}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            )}
+            
+            {categorizedImages.estiloDescripcion && (
+              <div className="text-xs text-gray-500 max-h-20 overflow-y-auto p-2 bg-gray-50 rounded">
+                {categorizedImages.estiloDescripcion}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Resto del componente (chat, mensajes, etc.) */}
+      <div className="flex-grow bg-white rounded-xl shadow-md overflow-hidden flex flex-col">
+        {/* Área de mensajes con estilo mejorado */}
+        <div 
+          ref={chatContainerRef}
+          className="flex-1 p-6 overflow-y-auto bg-white dark:bg-gray-900 min-h-[50vh] max-h-[calc(100vh-330px)]"
+        >
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center text-gray-500 p-6">
+              <div className="w-24 h-24 bg-indigo-100 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6">
+                <RiImageEditLine className="text-5xl text-indigo-500 dark:text-indigo-400" />
+              </div>
+              <h3 className="text-2xl font-bold mb-3 text-indigo-700 dark:text-indigo-300">¡Bienvenido al Chat Visual!</h3>
+              <p className="max-w-md text-gray-600 dark:text-gray-400 mb-8">
+                Carga una imagen y dinos cómo quieres modificarla. También puedes preguntar sobre la imagen o solicitar variaciones creativas.
+              </p>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
+                >
+                  <FaImage className="text-lg" />
+                  Subir una imagen
+                </button>
+                <button 
+                  onClick={() => setInput("¿Qué puedes hacer con mis imágenes?")}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-pink-500 to-rose-600 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
+                >
+                  <FaMagic className="text-lg" />
+                  Explorar capacidades
                 </button>
               </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${
+                    message.role === 'user' ? 'justify-end' : 'justify-start'
+                  }`}
+                >
+                  {/* Botones de acción para mensajes del usuario */}
+                  {message.role === 'user' && (
+                    <div className="flex flex-col mr-2 space-y-2 justify-center">
+                      <button
+                        onClick={() => handleEditUserMessage(message.id)}
+                        className="p-2 bg-purple-500 text-white rounded-full shadow-lg hover:bg-purple-600 transition-all duration-200 hover:scale-110 hover:rotate-12"
+                        aria-label="Editar mensaje"
+                        disabled={isLoading || editingMessageId !== null}
+                      >
+                        <RiEditBoxLine className="text-white" size={16} />
+                      </button>
+                      <button
+                        onClick={() => handleResendMessage(message.id)}
+                        className="p-2 bg-emerald-500 text-white rounded-full shadow-lg hover:bg-emerald-600 transition-all duration-200 hover:scale-110 hover:rotate-12"
+                        aria-label="Reenviar mensaje"
+                        disabled={isLoading}
+                      >
+                        <RiSendPlaneFill className="text-white" size={16} />
+                      </button>
+                    </div>
+                  )}
+                  
+                  <div
+                    className={`max-w-[80%] rounded-2xl shadow-md p-4 ${
+                      message.role === 'user'
+                        ? 'bg-gradient-to-br from-indigo-600 to-violet-700 text-white rounded-br-none relative'
+                        : 'bg-gradient-to-br from-gray-100 to-white dark:from-gray-800 dark:to-gray-700 dark:text-white rounded-bl-none border border-gray-200 dark:border-gray-600'
+                    }`}
+                  >
+                    {/* Botón de eliminar dentro de la burbuja del mensaje del usuario */}
+                    {message.role === 'user' && !message.isEditing && (
+                      <button
+                        onClick={() => handleDeleteUserMessage(message.id)}
+                        className="absolute bottom-2 right-2 p-1.5 bg-red-500 bg-opacity-80 text-white rounded-full hover:bg-red-600 transition-all duration-200 hover:scale-110"
+                        aria-label="Eliminar mensaje"
+                        disabled={isLoading}
+                      >
+                        <RiDeleteBin6Line className="text-white" size={14} />
+                      </button>
+                    )}
+                    
+                    {message.isEditing ? (
+                      <div className="relative">
+                        <textarea
+                          defaultValue={message.text}
+                          className="w-full bg-indigo-700 border border-indigo-500 rounded-lg p-3 pr-24 text-white focus:ring-2 focus:ring-indigo-400 focus:outline-none min-h-[80px] scrollbar-hide"
+                          rows={3}
+                          autoFocus
+                        />
+                        <div className="absolute right-3 top-3 flex space-x-2">
+                          <button
+                            onClick={() => {
+                              const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+                              handleSaveEdit(message.id, textarea.value);
+                            }}
+                            className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 shadow-md"
+                            aria-label="Guardar edición"
+                          >
+                            <FaCheck size={14} />
+                          </button>
+                          <button
+                            onClick={handleCancelEdit}
+                            className="p-2 bg-gray-500 text-white rounded-full hover:bg-gray-600 shadow-md"
+                            aria-label="Cancelar edición"
+                          >
+                            <FaTrash size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mb-3 leading-relaxed">{message.text}</p>
+                    )}
+                    
+                    {message.imageUrl && (
+                      <div className="relative mt-2 rounded-xl overflow-hidden shadow-lg">
+                        <ImageDisplay 
+                          src={message.imageUrl} 
+                          alt={`Imagen en mensaje de ${message.role === 'user' ? 'usuario' : 'AI'}`} 
+                        />
+                        
+                        {message.role === 'model' && message.imageUrl && (
+                          <div className="absolute top-2 right-2 flex gap-2">
+                            <button
+                              onClick={() => handleRegenerateImage(message.id)}
+                              className="p-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg hover:bg-indigo-100 transition-all duration-200 hover:scale-110"
+                              aria-label="Regenerar imagen"
+                              disabled={isLoading}
+                            >
+                              <RiRefreshLine className="text-emerald-600" />
+                            </button>
+                            <button
+                              onClick={() => handleDownloadImage(message.imageUrl!)}
+                              className="p-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg hover:bg-indigo-100 transition-all duration-200 hover:scale-110"
+                              aria-label="Descargar imagen"
+                            >
+                              <FaDownload className="text-indigo-600" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteImage(message.id)}
+                              className="p-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg hover:bg-red-100 transition-all duration-200 hover:scale-110"
+                              aria-label="Eliminar imagen"
+                            >
+                              <FaTrash className="text-red-600" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    <div className={`text-xs mt-2 flex items-center ${
+                      message.role === 'user' ? 'text-indigo-100 justify-start' : 'text-gray-500 dark:text-gray-400 justify-end'
+                    }`}>
+                      <span className="opacity-80">{message.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                      {message.role === 'model' && (
+                        <span className="ml-1 flex items-center">
+                          <FaRocket className="ml-1 text-indigo-500 dark:text-indigo-400" />
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
               
-              {/* Botón para limpiar el texto */}
+              {isLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-gradient-to-br from-gray-100 to-white dark:from-gray-800 dark:to-gray-700 p-4 rounded-2xl max-w-[80%] rounded-bl-none shadow-md border border-gray-200 dark:border-gray-600">
+                    <div className="flex items-center space-x-3">
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                        <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                        <div className="w-2 h-2 bg-pink-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                      </div>
+                      <span className="text-gray-600 dark:text-gray-300 font-medium">
+                        Creando magia visual...
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+        
+        {/* Sugerencias de prompts */}
+        {messages.length > 0 && !isLoading && (
+          <div className="bg-indigo-50 dark:bg-gray-800/70 px-4 py-3 border-t border-indigo-100 dark:border-gray-700 relative">
+            <div className="flex items-center">
+              <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300 whitespace-nowrap mr-3 flex-shrink-0">Sugerencias:</span>
+              <div className="flex gap-2 overflow-x-auto py-1.5 px-0.5 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-gray-300/50 dark:scrollbar-thumb-gray-600/50 pr-6 md:pr-0">
+                {SUGERENCIAS.map((sugerencia, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleUseSuggestion(index)}
+                    className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap transition-all ${
+                      selectedSuggestion === index
+                        ? 'bg-indigo-600 text-white shadow-md scale-105'
+                        : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-indigo-100 dark:hover:bg-gray-600 hover:shadow-sm'
+                    } border border-indigo-200 dark:border-gray-600 flex-shrink-0`}
+                  >
+                    {sugerencia}
+                  </button>
+                ))}
+              </div>
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 bg-gradient-to-l from-indigo-50 dark:from-gray-800/90 to-transparent w-6 h-8 pointer-events-none md:hidden"></div>
+            </div>
+          </div>
+        )}
+        
+        {/* Área de previsualización de imagen */}
+        {selectedImage && (
+          <div className="p-3 border-t border-indigo-200 dark:border-gray-700 bg-indigo-50 dark:bg-gray-800/50">
+            <div className="flex items-center">
+              <div className="mr-3">
+                <div className="relative w-16 h-16 rounded-lg overflow-hidden border-2 border-indigo-300 dark:border-indigo-700 shadow-md">
+                  <img
+                    src={selectedImage}
+                    alt="Imagen seleccionada"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+              <div className="flex-1">
+                <p className="text-xs font-medium text-indigo-700 dark:text-indigo-300 mb-1">Imagen lista para editar</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Describe cómo quieres modificarla</p>
+              </div>
               <button
-                onClick={() => setInput('')}
-                className={`p-3 transition-colors flex-shrink-0 self-stretch flex items-center ${
-                  !input.trim() 
-                    ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' 
-                    : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg'
-                }`}
-                disabled={!input.trim()}
-                title="Limpiar entrada"
-                aria-label="Limpiar entrada"
+                onClick={handleRemoveImage}
+                className="p-2 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full hover:bg-red-200 dark:hover:bg-red-800/30 transition-all"
+                aria-label="Eliminar imagen"
               >
-                <FaTrash size={16} />
+                <FaTrash size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+        
+        {/* Área de entrada centrada y con mejor alineación de botones */}
+        <div className="border-t border-indigo-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800/80">
+          <div className="bg-white dark:bg-gray-700 rounded-xl shadow-md flex items-center border border-gray-200 dark:border-gray-600">
+            {/* Botón para subir imagen */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="p-3 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-gray-600 rounded-lg transition-colors flex-shrink-0 self-stretch flex items-center"
+              disabled={isLoading}
+              title="Subir imagen"
+              aria-label="Subir imagen"
+            >
+              <FaUpload size={18} />
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept="image/*"
+                onChange={handleImageUpload}
+              />
+            </button>
+            
+            {/* Campo de texto con botón de envío */}
+            <div className="flex-1 relative min-w-0">
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Escribe un mensaje o instrucción para editar la imagen..."
+                className="w-full border-0 focus:ring-0 bg-transparent text-gray-700 dark:text-white py-3 pl-2 pr-12 resize-none min-h-[48px] max-h-[80px] leading-tight scrollbar-hide"
+                rows={1}
+                disabled={isLoading}
+              />
+              
+              {/* Botón de envío sobre el textarea */}
+              <button
+                onClick={handleSendMessage}
+                disabled={isLoading || (!input.trim() && !selectedImage)}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-all ${
+                  isLoading || (!input.trim() && !selectedImage)
+                    ? 'bg-gray-200 dark:bg-gray-600 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-md hover:from-indigo-700 hover:to-purple-700'
+                }`}
+                aria-label="Enviar mensaje"
+              >
+                <FaPaperPlane className="h-4 w-4" />
               </button>
             </div>
             
-            <div className="mt-2 text-center">
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                💡 Puedes solicitar modificaciones específicas o hacer preguntas sobre las imágenes
-              </p>
-            </div>
+            {/* Botón para limpiar el texto */}
+            <button
+              onClick={() => setInput('')}
+              className={`p-3 transition-colors flex-shrink-0 self-stretch flex items-center ${
+                !input.trim() 
+                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' 
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg'
+              }`}
+              disabled={!input.trim()}
+              title="Limpiar entrada"
+              aria-label="Limpiar entrada"
+            >
+              <FaTrash size={16} />
+            </button>
+          </div>
+          
+          <div className="mt-2 text-center">
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              💡 Puedes solicitar modificaciones específicas o hacer preguntas sobre las imágenes
+            </p>
           </div>
         </div>
       </div>
-      
-      {/* Estilos para ocultar la barra de desplazamiento y personalizar scrollbars */}
-      <style jsx global>{`
-        /* Para Chrome, Safari y Opera */
-        .scrollbar-hide::-webkit-scrollbar {
-          display: none;
-        }
-        
-        /* Para IE, Edge y Firefox */
-        .scrollbar-hide {
-          -ms-overflow-style: none;  /* IE y Edge */
-          scrollbar-width: none;  /* Firefox */
-        }
-        
-        /* Personalización de scrollbars delgadas */
-        .scrollbar-thin::-webkit-scrollbar {
-          width: 4px;
-          height: 4px;
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar-thumb {
-          background-color: rgba(156, 163, 175, 0.3);
-          border-radius: 20px;
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-          background-color: rgba(156, 163, 175, 0.5);
-        }
-        
-        /* Para Firefox */
-        .scrollbar-thin {
-          scrollbar-width: thin;
-          scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
-        }
-      `}</style>
-    </>
+    </div>
   );
 }

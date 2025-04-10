@@ -16,8 +16,6 @@ export type AdvancedSettingsValues = {
   profundidadSombras: number;
   nitidezDetalles: number;
   imagenReferencia: string | null;
-  rostroPersistente: boolean;
-  imagenesRostro: string[];
 };
 
 export type AdvancedSettingsProps = {
@@ -70,11 +68,9 @@ export default function AdvancedSettings({ values, onChange }: AdvancedSettingsP
     profundidadSombras: false,
     nitidezDetalles: false,
     imagenReferencia: false,
-    rostroPersistente: false,
   });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const rostroInputRef = useRef<HTMLInputElement>(null);
   
   const toggleTooltip = (tooltip: keyof typeof tooltips) => {
     setTooltips({ ...tooltips, [tooltip]: !tooltips[tooltip] });
@@ -160,57 +156,6 @@ export default function AdvancedSettings({ values, onChange }: AdvancedSettingsP
     });
   };
 
-  const handleRostroImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    
-    // Limitar a máximo 6 imágenes
-    if (values.imagenesRostro.length + files.length > 6) {
-      toast.error('Máximo 6 imágenes de rostro permitidas');
-      return;
-    }
-    
-    // Convertir FileList a Array para poder iterarlo
-    Array.from(files).forEach(async (file) => {
-      // Verificar tamaño (máximo 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error(`La imagen ${file.name} supera los 5MB`);
-        return;
-      }
-      
-      // Verificar tipo de archivo
-      if (!file.type.startsWith('image/')) {
-        toast.error(`El archivo ${file.name} debe ser una imagen`);
-        return;
-      }
-      
-      try {
-        // Convertir a formato compatible (JPEG) independientemente del formato original
-        const compatibleImage = await convertToCompatibleFormat(file);
-        
-        onChange({ 
-          imagenesRostro: [...values.imagenesRostro, compatibleImage],
-          rostroPersistente: true
-        });
-        
-        toast.success(`Imagen de rostro ${values.imagenesRostro.length + 1} convertida y cargada`);
-      } catch (error) {
-        console.error('Error al convertir imagen:', error);
-        toast.error(`Error al procesar ${file.name}. Intenta con otra imagen.`);
-      }
-    });
-  };
-  
-  const handleRemoveRostroImage = (index: number) => {
-    const newImagenes = [...values.imagenesRostro];
-    newImagenes.splice(index, 1);
-    onChange({ 
-      imagenesRostro: newImagenes,
-      rostroPersistente: newImagenes.length > 0
-    });
-    toast.success('Imagen de rostro eliminada');
-  };
-  
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -480,128 +425,6 @@ export default function AdvancedSettings({ values, onChange }: AdvancedSettingsP
             onChange={(value) => onChange({ nitidezDetalles: value })}
           />
         </div>
-      </div>
-      
-      {/* Sección de Rostro Persistente */}
-      <div className="pt-4 mt-6 border-t border-gray-200 dark:border-gray-700">
-        <div className="flex items-center mb-2">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Rostro Persistente (Experimental)
-          </label>
-          <button 
-            className="ml-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-            onClick={() => toggleTooltip('rostroPersistente')}
-            aria-label="Más información sobre rostro persistente"
-          >
-            <FaQuestionCircle size={14} />
-          </button>
-        </div>
-        
-        {tooltips.rostroPersistente && (
-          <div className="relative z-10 p-3 mb-4 bg-white dark:bg-gray-700 rounded shadow-lg text-xs text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 max-w-lg">
-            <p className="mb-2 font-medium">Esta función <strong>experimental</strong> intenta mantener características faciales consistentes en la imagen generada.</p>
-            <p className="mb-2">Para resultados óptimos:</p>
-            <ul className="list-disc pl-4 mb-2 space-y-1">
-              <li>Proporciona 4-6 imágenes de alta calidad del mismo rostro</li>
-              <li>Incluye vistas frontal, perfil y ángulos intermedios</li>
-              <li>Asegúrate que las fotos tengan buena iluminación y definición</li>
-              <li>Evita elementos que obstruyan el rostro como gafas de sol, sombreros o máscaras</li>
-              <li>Procura que las imágenes muestren expresiones neutras o similares</li>
-              <li>Si es posible, incluye fotos con fondos simples o uniformes</li>
-            </ul>
-            <p className="mt-2 text-amber-500 dark:text-amber-400 font-medium">Nota: Este sistema aún está en fase experimental. A mayor número y calidad de imágenes de referencia, mejores resultados se obtendrán.</p>
-          </div>
-        )}
-        
-        <div className="flex items-center mb-4">
-          <input
-            type="checkbox"
-            id="enableRostroPersistente"
-            checked={values.rostroPersistente}
-            onChange={(e) => onChange({ rostroPersistente: e.target.checked })}
-            className="mr-2 h-4 w-4 text-purple-600 focus:ring-purple-600 border-gray-300 rounded"
-          />
-          <label htmlFor="enableRostroPersistente" className="text-sm text-gray-700 dark:text-gray-300">
-            Activar rostro persistente
-          </label>
-        </div>
-        
-        {values.rostroPersistente && (
-          <div className="space-y-4">
-            <div className="bg-amber-50 dark:bg-amber-900/20 p-3 rounded-md border border-amber-200 dark:border-amber-800/30">
-              <p className="text-sm text-amber-800 dark:text-amber-300">
-                Sube entre 4-6 fotos de la misma persona desde diferentes ángulos para obtener mejores resultados. 
-                Cuantas más fotos de calidad proporciones, mayor precisión tendrá el modelo para preservar el rostro.
-              </p>
-              <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-amber-700 dark:text-amber-400">
-                <li>Incluye diferentes ángulos: frontal, perfil izquierdo/derecho y 3/4</li>
-                <li>Asegúrate que las fotos tengan buena iluminación y el rostro sea claramente visible</li>
-                <li>Evita expresiones muy distintas entre fotos</li>
-                <li>Si deseas resultados más precisos, utiliza fotos en contextos similares al que deseas generar</li>
-              </ul>
-            </div>
-            
-            <div className="flex flex-col items-start space-y-3">
-              <input
-                ref={rostroInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleRostroImageUpload}
-                className="hidden"
-                id="rostroImageInput"
-                multiple
-              />
-              
-              <div className="flex flex-wrap gap-3">
-                <label
-                  htmlFor="rostroImageInput"
-                  className={`flex items-center justify-center px-4 py-2 text-gray-700 bg-gray-100 dark:text-white dark:bg-gray-800 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none cursor-pointer border border-gray-300 dark:border-gray-600 ${values.imagenesRostro.length >= 6 ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  <FaUpload className="mr-2" />
-                  {values.imagenesRostro.length === 0 ? 'Subir imágenes de rostro' : 'Añadir más imágenes'}
-                </label>
-                
-                {values.imagenesRostro.length > 0 && (
-                  <button
-                    onClick={() => onChange({ imagenesRostro: [], rostroPersistente: false })}
-                    className="flex items-center justify-center px-4 py-2 text-red-700 bg-red-100 dark:text-red-200 dark:bg-red-900/30 rounded-md hover:bg-red-200 dark:hover:bg-red-800/50 focus:outline-none"
-                  >
-                    <FaTrash className="mr-2" />
-                    Eliminar todas
-                  </button>
-                )}
-              </div>
-              
-              {values.imagenesRostro.length > 0 && (
-                <div className="mt-3 w-full">
-                  <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
-                    Imágenes de rostro ({values.imagenesRostro.length}/6):
-                  </p>
-                  <div className="flex flex-wrap gap-4">
-                    {values.imagenesRostro.map((imagen, index) => (
-                      <div key={index} className="relative group">
-                        <div className="w-24 h-24 rounded-md overflow-hidden border border-gray-300 dark:border-gray-600">
-                          <img 
-                            src={imagen} 
-                            alt={`Rostro ${index + 1}`} 
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                        <button
-                          onClick={() => handleRemoveRostroImage(index)}
-                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                          aria-label="Eliminar imagen de rostro"
-                        >
-                          <FaTrash size={10} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
       
       {/* Imagen de Referencia */}
