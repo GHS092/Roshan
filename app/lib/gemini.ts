@@ -1,5 +1,4 @@
 import { GoogleGenerativeAI, GenerateContentResult, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { getOptimizedRostroPrompt } from './rostroPrompts';
 
 // Usar variables de entorno para la API key
 const API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY || 'AIzaSyBcYsacd3Ml2wlduHZRzkFzHLtgOcylOhQ';
@@ -2440,10 +2439,15 @@ export async function generateImageFromText(
     console.log(`Generando imagen desde texto con prompt: "${prompt}"`);
     console.log(`Parámetros: temperatura=${temperature}, topP=${topP}, topK=${topK}, semilla=${seed}, altaResolución=${highResolution}, realismo=${realism}`);
     
+    // Verificar si es estilo Ghibli para logging específico
+    if (style === 'ghibli') {
+      console.log('Aplicando optimizaciones para estilo Studio Ghibli');
+    }
+    
     if (advancedOptionsEnabled) {
       console.log(`Ajustes avanzados activados: 
         Estilo: ${options?.estiloFotografico}
-        Textura: ${options?.texturaPiel}
+        Textura: ${options?.texturaPiel} 
         Iluminación: ${options?.iluminacion}
         Post-procesado: ${options?.postProcesado}
       `);
@@ -2494,16 +2498,64 @@ export async function generateImageFromText(
       enhancedPrompt = `Imagen de ALTA RESOLUCIÓN (1920x1080): ${enhancedPrompt}`;
     }
     
-    // Añadir estilo si se especifica
-    if (style) {
+    // Añadir estilo si se especifica (excepto para Ghibli que ya viene con el prompt optimizado)
+    if (style && style !== 'ghibli') {
       enhancedPrompt = `${enhancedPrompt}, estilo ${style}`;
     }
     
     // Construir el contenido para enviar al modelo con indicaciones mejoradas para calidad
     let prompt_text = '';
     
-    // Preparar el prompt según los parámetros activados
-    if (rostroPersistenteEnabled) {
+    // Manejar el caso especial para estilo Ghibli
+    if (style === 'ghibli') {
+      // PROMPT ESPECIAL OPTIMIZADO PARA ESTILO STUDIO GHIBLI
+      prompt_text = `
+INSTRUCCIONES DETALLADAS PARA ESTILO STUDIO GHIBLI:
+
+1. CARACTERÍSTICAS VISUALES CLAVE:
+   - Colores: Paleta pastel con tonos suaves pero vivos, especialmente azules, verdes y ocres
+   - Iluminación: Luz natural, brillante y con sombras suaves
+   - Líneas: Contornos definidos pero suaves, no demasiado marcados
+   - Texturas: Aspecto acuarela con gradientes sutiles y transiciones suaves
+   - Proporción: Personajes ligeramente estilizados con cabezas un poco más grandes
+
+2. ELEMENTOS CARACTERÍSTICOS:
+   - Fondos muy detallados con elementos naturales como plantas, árboles y flores
+   - Nubes con formas redondeadas y suaves
+   - Detalles pequeños y minuciosos en escenarios
+   - Expresiones faciales simples pero muy emotivas
+   - Movimiento sugerido en elementos como cabello, ropa y vegetación
+
+3. ATMÓSFERA Y ESTILO:
+   - Sensación de calidez, nostalgia y maravilla
+   - Equilibrio entre realismo y fantasía
+   - Ambientes que transmiten tranquilidad y contemplación
+   - Contraste entre lo ordinario y lo mágico
+
+4. PERSONAJES Y ELEMENTOS ICÓNICOS:
+   - Si se menciona "Totoro": Criatura espiritual grande, gris con vientre blanco, orejas puntiagudas
+   - Si se menciona "Catbus": Gato-autobús con sonrisa grande, ojos brillantes y múltiples patas
+   - Si se menciona "No-Face": Espíritu alto con máscara blanca oval y cuerpo negro translúcido
+   - Si se menciona "Soot Sprites": Pequeñas bolitas de hollín negras con ojos grandes
+   - Si se menciona "Haku": Joven de pelo verde-azulado que se transforma en dragón blanco
+   - Si se menciona "Calcifer": Llama viviente con ojos y boca expresivos
+   - Si se menciona "Kodamas": Pequeños espíritus del bosque blancos con cabezas que hacen clic
+   - Si se menciona "Ponyo": Niña-pez con pelo rojo brillante y vestido rojo
+   - Si se menciona "Robot jardinero": Robot con apariencia oxidada y plantas creciendo en su cuerpo
+   - Si se menciona "Ohmu": Insectos gigantes con múltiples ojos azules brillantes
+
+5. REFERENTES ESPECÍFICOS:
+   - Fondos detallados como en "Mi vecino Totoro"
+   - Colores vibrantes como en "El viaje de Chihiro"
+   - Elementos naturales como en "La princesa Mononoke"
+   - Detalles arquitectónicos como en "El castillo ambulante"
+   - Texturas acuarela como en "Ponyo"
+
+TÉCNICA: Mantén un balance preciso entre detalle y simplicidad, característico del estudio Ghibli. No exageres ningún elemento.
+`;
+    }
+    // Procesamiento normal para otros estilos
+    else if (rostroPersistenteEnabled) {
       // PROMPT ESPECIAL PARA MANTENER PERSISTENCIA FACIAL
       prompt_text = `Crea una imagen profesional de: ${enhancedPrompt}
 
@@ -3163,6 +3215,12 @@ INSTRUCCIONES CRÍTICAS PARA REALISMO FOTOGRÁFICO:
       // Combinar el mensaje original con las instrucciones de realismo
       const enhancedMessage = `${message}\n\n${realismInstructions}`;
       userMessageParts.push({ text: enhancedMessage });
+    } else {
+      // Si no hay mensaje pero hay imagen, añadir un texto predeterminado
+      // para evitar el error "contents.parts must not be empty"
+      if (imageData) {
+        userMessageParts.push({ text: "Analiza esta imagen.\n\n" + realismInstructions });
+      }
     }
     
     // Si hay imagen, añadirla a las partes
@@ -3184,6 +3242,11 @@ INSTRUCCIONES CRÍTICAS PARA REALISMO FOTOGRÁFICO:
         console.error("Formato de datos de imagen no válido");
         throw new Error("Formato de datos de imagen no válido");
       }
+    }
+    
+    // Verificar que haya contenido para enviar
+    if (userMessageParts.length === 0) {
+      throw new Error("No hay contenido para enviar al modelo. Se requiere texto o imagen.");
     }
     
     // Añadir el mensaje del usuario al historial
@@ -3380,54 +3443,24 @@ const COMPATIBLE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 // Función para verificar si un Data URL es de un formato de imagen compatible
 function isCompatibleImageFormat(dataUrl: string): boolean {
-  const matches = dataUrl.match(/^data:([A-Za-z-+\/]+);base64,/);
-  if (!matches || matches.length !== 2) return false;
-  
-  const mimeType = matches[1];
-  return COMPATIBLE_MIME_TYPES.includes(mimeType);
+  return dataUrl.startsWith('data:image/jpeg') || 
+         dataUrl.startsWith('data:image/png') || 
+         dataUrl.startsWith('data:image/webp');
 }
 
 // Función para asegurar que la imagen esté en formato compatible
 async function ensureCompatibleFormat(imageDataUrl: string): Promise<string> {
-  // Si ya es compatible, devolverla sin cambios
-  if (isCompatibleImageFormat(imageDataUrl)) return imageDataUrl;
+  if (isCompatibleImageFormat(imageDataUrl)) {
+    return imageDataUrl;
+  }
   
-  // Convertir a formato compatible (JPEG)
   try {
-    console.log("Convirtiendo imagen a formato compatible...");
-    
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          console.error("No se pudo crear contexto de renderizado");
-          return reject(new Error("Error al convertir imagen: no se pudo crear contexto de renderizado"));
-        }
-        
-        // Dibujar la imagen en el canvas
-        ctx.drawImage(img, 0, 0);
-        
-        // Convertir a JPEG (formato compatible garantizado)
-        const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-        console.log("Imagen convertida exitosamente a JPEG");
-        resolve(jpegDataUrl);
-      };
-      
-      img.onerror = (err) => {
-        console.error("Error al cargar imagen para conversión:", err);
-        reject(new Error("Error al cargar imagen para conversión de formato"));
-      };
-      
-      img.src = imageDataUrl;
+    return await processImageWithCanvas(imageDataUrl, (ctx, width, height) => {
+      // No hacer nada, solo convertir al formato de salida predeterminado (JPEG)
     });
   } catch (error) {
     console.error("Error al convertir formato de imagen:", error);
-    throw new Error(`Error al convertir formato de imagen: ${error}`);
+    // Retornar la imagen original si falla la conversión
+    return imageDataUrl;
   }
 }
